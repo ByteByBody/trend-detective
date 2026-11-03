@@ -216,12 +216,19 @@ main { padding: 0 var(--gutter); }
 .panel {
   background: #fff;
   border: 1px solid var(--line);
-  border-top-width: 3px;
   border-radius: 0;
   overflow: hidden;
 }
-.panel--naive { border-top-color: var(--naive); }
-.panel--corrected { border-top-color: var(--corrected); }
+/* The labelled map strip carries the naive/corrected colour; the bare
+   coloured panel edge is gone, as the instrument restyle intends. */
+.panel--naive .map-frame__label {
+  color: var(--naive);
+  border-bottom-color: var(--naive);
+}
+.panel--corrected .map-frame__label {
+  color: var(--corrected);
+  border-bottom-color: var(--corrected);
+}
 
 .panel__head {
   padding: 0.9rem 1rem 0.6rem;
