@@ -284,6 +284,76 @@
   const fmt = (value, unit, opts) => TDFormat.formatNumber(value, unit, opts);
   const MONTHS_PER_DECADE = TDFormat.MONTHS_PER_DECADE;
 
+  function topContested(demo, n) {
+    // The five cells with the smallest p-values among those the naive test
+    // flags: the claims the raw method most confidently makes and the
+    // correction still drops. Those are the ones worth arguing about.
+    const cells = [];
+    if (!demo || !demo.naive_mask) return cells;
+    demo.naive_mask.forEach((row, i) => {
+      row.forEach((flagged, j) => {
+        if (!flagged) return;
+        cells.push({
+          i,
+          j,
+          lat: demo.lat[i],
+          lon: demo.lon[j],
+          p: demo.p_value ? demo.p_value[i][j] : null,
+          slope: demo.slope[i][j],
+        });
+      });
+    });
+    const pOf = (cell) =>
+      cell.p === null || cell.p === undefined ? Infinity : cell.p;
+    cells.sort((a, b) => pOf(a) - pOf(b));
+    return cells.slice(0, n);
+  }
+
+  function renderContested(demo) {
+    const list = el("contested-list");
+    if (!list) return;
+    list.innerHTML = "";
+    const units = demo.units || "";
+    topContested(demo, 5).forEach((cell) => {
+      const li = document.createElement("li");
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "contested__item";
+
+      const place = document.createElement("span");
+      place.className = "contested__place";
+      place.textContent =
+        `${fmt(cell.lat, "°", { decimals: 1 })}, ` +
+        `${fmt(cell.lon, "°", { decimals: 1 })}`;
+
+      const readout = document.createElement("span");
+      readout.className = "contested__readout";
+      const pText =
+        cell.p === null || cell.p === undefined
+          ? "p n/a"
+          : `p ${fmt(cell.p, "", { decimals: 4 })}`;
+      const slopeText =
+        cell.slope === null || cell.slope === undefined || !isFinite(cell.slope)
+          ? "trend n/a"
+          : fmt(cell.slope * MONTHS_PER_DECADE,
+              units ? `${units} per decade` : "per decade",
+              { decimals: 3 });
+      readout.textContent = `${pText} · ${slopeText}`;
+
+      b.appendChild(place);
+      b.appendChild(readout);
+      b.addEventListener("click", () => {
+        loadSeries(cell.lat, cell.lon);
+        ["naive", "corrected"].forEach((key) => {
+          const map = state.maps[key];
+          if (map) map.flyTo([cell.lat, cell.lon], Math.max(map.getZoom(), 3));
+        });
+      });
+      li.appendChild(b);
+      list.appendChild(li);
+    });
+  }
+
   function renderDemo(demo) {
     state.demo = demo;
     state.bounds = gridBounds(demo);
@@ -340,6 +410,8 @@
       });
     el("slope-min").textContent = perDecade(slopeImg.min);
     el("slope-max").textContent = perDecade(slopeImg.max);
+
+    renderContested(demo);
 
     const source = el("data-source");
     if (source) {

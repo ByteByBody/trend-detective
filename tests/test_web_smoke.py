@@ -287,3 +287,11 @@ def test_a_cold_analysis_shows_progress_rather_than_a_blank_map():
     js = client.get("/static/app.js").text
     assert "function setBusy(" in js
     assert "first run" in js.lower()
+
+
+def test_the_most_contested_cells_are_listed_and_clickable():
+    html = client.get("/").text
+    assert "contested-list" in html
+    js = client.get("/static/app.js").text
+    assert "function topContested(" in js
+    assert "map.flyTo" in js
