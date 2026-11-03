@@ -94,10 +94,24 @@ def _annual_anomaly(da) -> list[float]:
     if values.ndim != 3 or values.shape[0] < 12:
         return []
 
+    # Weight by cos(latitude): a polar row covers far less surface than an
+    # equatorial one, so an equal-weight grid mean is not a global mean.
+    lat = np.asarray(da["lat"].values, dtype=float)
+    row_weight = np.cos(np.deg2rad(lat))
+    row_weight = np.where(np.isfinite(row_weight) & (row_weight > 0), row_weight, 0.0)
+
     yearly = []
     for y in range(values.shape[0] // 12):
         block = values[y * 12 : (y + 1) * 12]
-        yearly.append(np.nanmean(block) if np.isfinite(block).any() else np.nan)
+        mask = np.isfinite(block)
+        weight = np.broadcast_to(row_weight[None, :, None], block.shape)
+        denom = float(np.where(mask, weight, 0.0).sum())
+        if denom > 0:
+            yearly.append(
+                float(np.where(mask, block * weight, 0.0).sum() / denom)
+            )
+        else:
+            yearly.append(np.nan)
 
     yearly = np.asarray(yearly, dtype=float)
     finite = yearly[np.isfinite(yearly)]
@@ -209,6 +223,25 @@ def _region_centroids(
 
 
 def _fingerprint_refresh(key, selected: str, served: list[str], labels: np.ndarray) -> None:
+    """Run the build and guarantee the shared state leaves "preparing".
+
+    The build runs on a daemon thread; if it raises anything other than the
+    per-variable failures handled inside, the thread would die and the UI would
+    poll "preparing 5 of 5" forever. Every other exit path sets a terminal
+    status, so this one must too.
+    """
+    try:
+        _fingerprint_build(key, selected, served, labels)
+    except Exception as exc:  # noqa: BLE001 - a dead thread must not strand the UI
+        with _FP_LOCK:
+            if _FP_STATE.get("key") == key:
+                _FP_STATE.update(
+                    status="unavailable",
+                    reason=f"the fingerprint build failed: {exc}",
+                )
+
+
+def _fingerprint_build(key, selected: str, served: list[str], labels: np.ndarray) -> None:
     """Load and analyse every served variable, then store the fingerprint.
 
     Synchronous body of the background build, kept separate so tests can run it
@@ -241,6 +274,16 @@ def _fingerprint_refresh(key, selected: str, served: list[str], labels: np.ndarr
 
     rv = fingerprint.region_vectors(slopes, labels)
     z, kept = fingerprint.standardize(rv.matrix, rv.variables)
+    if len(kept) < 2:
+        # With one surviving axis the "distance" is meaningless; with none,
+        # every region sits at distance 0. Either way it is not a fingerprint.
+        with _FP_LOCK:
+            if _FP_STATE.get("key") == key:
+                _FP_STATE.update(
+                    status="unavailable",
+                    reason="fewer than two variables could be standardized",
+                )
+        return
     rings = fingerprint.region_rings(labels, lat, lon)
     centroids = _region_centroids(labels, lat, lon, rv.region_ids)
 
@@ -351,18 +394,35 @@ def _fingerprint_payload(state: dict, lat: float, lon: float, k: int) -> dict:
     if row is None:
         return {"reference": None, "matches": []}
 
-    reference = describe(row)
-    reference["standardized"] = {
-        name: (
-            None if not np.isfinite(z[row, col]) else round(float(z[row, col]), 4)
-        )
-        for col, name in enumerate(kept)
-    }
+    def standardized_of(which: int) -> dict:
+        return {
+            name: (
+                None
+                if not np.isfinite(z[which, col])
+                else round(float(z[which, col]), 4)
+            )
+            for col, name in enumerate(kept)
+        }
 
-    matches = [
-        describe(hit_row, distance)
-        for hit_row, distance in fingerprint.nearest(z, row, k)
-    ]
+    reference = describe(row)
+    reference["standardized"] = standardized_of(row)
+
+    matches = []
+    for hit_row, distance in fingerprint.nearest(z, row, k):
+        item = describe(hit_row, distance)
+        item["standardized"] = standardized_of(hit_row)
+        # Each variable's signed contribution to the distance: how far the match
+        # sits from the reference on that axis. Sorting by magnitude names the
+        # drivers ("matched mainly on drying"), without claiming a season.
+        item["contribution"] = {
+            name: (
+                None
+                if not (np.isfinite(z[hit_row, col]) and np.isfinite(z[row, col]))
+                else round(float(z[hit_row, col] - z[row, col]), 4)
+            )
+            for col, name in enumerate(kept)
+        }
+        matches.append(item)
     regions = [
         {
             "region_id": region_id,
@@ -437,7 +497,12 @@ def get_fingerprint(
         # progress, and a synchronous test double would otherwise deadlock.
         _start_fingerprint_thread(key, variable, served, labels)
         with _FP_LOCK:
-            snapshot = dict(_FP_STATE)
+            # Adopt the builder's result only while the shared state is still
+            # ours. A concurrent request for a different variable may have
+            # replaced it; answering with that payload would mislabel another
+            # variable's fingerprint as this one's, so keep our "preparing".
+            if _FP_STATE.get("key") == key:
+                snapshot = dict(_FP_STATE)
 
     if snapshot["status"] == "preparing":
         return {**base, "status": "preparing", "progress": snapshot["progress"]}

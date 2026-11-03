@@ -323,3 +323,125 @@ def test_fingerprint_ready_payload_lists_reference_and_matches(monkeypatch):
     assert body["matches"][0]["region_id"] == 2
     assert body["matches"][0]["rings"]  # an outline travels with the match
     assert {r["region_id"] for r in body["regions"]} == {1, 2}
+    # "Matched mainly on drying and weak warming" has to be derivable from the
+    # response, so a match carries the same standardized vector as the
+    # reference plus each variable's signed contribution to the distance.
+    assert set(body["matches"][0]["standardized"]) == set(body["kept"])
+    assert set(body["matches"][0]["contribution"]) == set(body["kept"])
+
+
+def test_a_failed_fingerprint_build_reports_unavailable_not_preparing_forever(monkeypatch):
+    # A build that raises must not strand the UI on "preparing 2 of 2".
+    labels = np.array([[1, 1], [2, 2]])
+    key = ("a", ("a", "b"))
+    monkeypatch.setattr(app_module, "_served_variables", lambda: ["a", "b"])
+    monkeypatch.setattr(app_module, "_region_labels", lambda v: (labels, None))
+
+    def exploding_grid(variable):
+        raise RuntimeError("download failed")
+
+    exploding_grid.cache_clear = lambda: None
+    monkeypatch.setattr(app_module, "_demo_grid", exploding_grid)
+
+    with app_module._FP_LOCK:
+        app_module._FP_STATE.clear()
+        app_module._FP_STATE.update(
+            key=key, status="preparing", reason=None, progress={"done": 0, "total": 2}
+        )
+    app_module._fingerprint_refresh(key, "a", ["a", "b"], labels)
+
+    with app_module._FP_LOCK:
+        assert app_module._FP_STATE["status"] == "unavailable"
+        assert app_module._FP_STATE.get("reason")
+        app_module._FP_STATE.clear()
+
+
+def test_fingerprint_is_unavailable_when_under_two_variables_survive(monkeypatch):
+    # Two constant-across-regions variables both standardize away; matching on
+    # zero or one axis is not a fingerprint, so the build must say so instead of
+    # reporting every region as a distance-0 twin.
+    labels = np.array([[1, 1], [2, 2]])
+    flat = np.array([[5.0, 5.0], [5.0, 5.0]])
+    slopes = {"a": flat, "b": flat.copy()}
+    key = ("a", ("a", "b"))
+    monkeypatch.setattr(app_module, "_served_variables", lambda: ["a", "b"])
+    monkeypatch.setattr(app_module, "_region_labels", lambda v: (labels, None))
+    monkeypatch.setattr(app_module, "_slope_grid", lambda v: slopes[v])
+
+    grid = xr.DataArray(
+        np.zeros((24, 2, 2)),
+        dims=("time", "lat", "lon"),
+        coords={"time": np.arange(24), "lat": [0.0, -1.0], "lon": [0.0, 1.0]},
+    )
+
+    def fake_grid(variable):
+        return grid
+
+    fake_grid.cache_clear = lambda: None
+    monkeypatch.setattr(app_module, "_demo_grid", fake_grid)
+
+    with app_module._FP_LOCK:
+        app_module._FP_STATE.clear()
+        app_module._FP_STATE.update(
+            key=key, status="preparing", reason=None, progress={"done": 0, "total": 2}
+        )
+    app_module._fingerprint_refresh(key, "a", ["a", "b"], labels)
+
+    with app_module._FP_LOCK:
+        assert app_module._FP_STATE["status"] == "unavailable"
+        assert "two variables" in app_module._FP_STATE["reason"]
+        app_module._FP_STATE.clear()
+
+
+def test_a_concurrent_variable_switch_does_not_leak_another_payload(monkeypatch):
+    # Request A is starting its build; before it re-reads the shared state,
+    # request B for a different variable replaces it. A must report that its own
+    # build is preparing, never B's ready payload.
+    labels = np.array([[1, 1], [2, 2]])
+    monkeypatch.setattr(app_module, "_served_variables", lambda: ["a", "b"])
+    monkeypatch.setattr(app_module, "_region_labels", lambda v: (labels, None))
+
+    def fake_grid(variable):
+        raise AssertionError("this build must not run")
+
+    fake_grid.cache_clear = lambda: None
+    monkeypatch.setattr(app_module, "_demo_grid", fake_grid)
+
+    def switch_under_us(key, selected, served, labels_):
+        with app_module._FP_LOCK:
+            app_module._FP_STATE.clear()
+            app_module._FP_STATE.update(
+                key=("other", ("a", "b")),
+                status="ready",
+                reason=None,
+                progress={"done": 2, "total": 2},
+            )
+
+    monkeypatch.setattr(app_module, "_start_fingerprint_thread", switch_under_us)
+
+    with app_module._FP_LOCK:
+        app_module._FP_STATE.clear()
+    r = client.get("/fingerprint/a?lat=0&lon=0&k=1")
+    body = r.json()
+    assert body["status"] == "preparing"
+    assert body["reference"] is None
+    with app_module._FP_LOCK:
+        app_module._FP_STATE.clear()
+
+
+def test_the_stripe_band_weights_polar_rows_less():
+    # A global mean that weights every grid row equally over-counts the poles,
+    # where a cell covers far less surface; weight by cos(latitude) instead.
+    values = np.zeros((24, 2, 1))
+    values[0:12, 0, 0] = 10.0  # polar row, year 0
+    values[12:24, 0, 0] = 20.0  # polar row, year 1
+    da = xr.DataArray(
+        values,
+        dims=("time", "lat", "lon"),
+        coords={"time": np.arange(24), "lat": [80.0, 0.0], "lon": [0.0]},
+    )
+    out = app_module._annual_anomaly(da)
+    spread = max(out) - min(out)
+    # The cos-weighted spread is ~1.48; the flat equal-row mean would give 5.0.
+    assert abs(spread - 1.479) < 0.05
+    assert abs(sum(out)) < 1e-9
