@@ -6,6 +6,7 @@ synthetic grid, and a per-cell time series. See docs/algorithms.md section 8.
 
 from __future__ import annotations
 
+import threading
 from functools import lru_cache
 from pathlib import Path
 
@@ -13,9 +14,10 @@ import numpy as np
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from scipy import ndimage
 
 from trend_detective import catalog, config
-from trend_detective.analysis import pipeline
+from trend_detective.analysis import fingerprint, pipeline
 from trend_detective.data import base as data_source
 
 _WEB_DIR = Path(__file__).resolve().parents[2] / "web"
@@ -158,6 +160,290 @@ def get_catalog() -> list[dict]:
         for key, v in catalog.VARIABLES.items()
         if key in served
     ]
+
+
+# --- trend fingerprints -------------------------------------------------------
+
+#: One fingerprint build at a time. Keyed on (selected variable, served set), so
+#: switching variables rebuilds while switching back reuses the result. The lock
+#: guards the dict; the expensive work happens on a daemon thread because five
+#: cold variables is minutes, not milliseconds.
+_FP_LOCK = threading.Lock()
+_FP_STATE: dict = {}
+
+
+def _region_labels(variable: str) -> tuple[np.ndarray | None, str | None]:
+    """Corrected connected patches of one variable, or a reason there are none.
+
+    Reuses the cached `/demo` body, so the region field costs nothing beyond the
+    analysis the dashboard already asked for.
+    """
+    body = _demo_body(variable)
+    mask = np.asarray(body["corrected_mask"], dtype=bool)
+    if not mask.any():
+        return None, "no corrected patches for this variable"
+    labels, _ = ndimage.label(mask, structure=np.ones((3, 3), dtype=int))
+    return labels, None
+
+
+def _slope_grid(variable: str) -> np.ndarray:
+    """Per-pixel Theil-Sen slope for one variable, in catalog units."""
+    body = _demo_body(variable)
+    return np.asarray(body["slope"], dtype=float)
+
+
+def _region_centroids(
+    labels: np.ndarray, lat: np.ndarray, lon: np.ndarray, region_ids: list[int]
+) -> dict[int, tuple[float, float]]:
+    centroids = {}
+    for region_id in region_ids:
+        cells = np.argwhere(labels == region_id)
+        if not cells.size:
+            continue
+        centroids[region_id] = (
+            float(np.mean(lat[cells[:, 0]])),
+            float(np.mean(lon[cells[:, 1]])),
+        )
+    return centroids
+
+
+def _fingerprint_refresh(key, selected: str, served: list[str], labels: np.ndarray) -> None:
+    """Load and analyse every served variable, then store the fingerprint.
+
+    Synchronous body of the background build, kept separate so tests can run it
+    without racing a thread.
+    """
+    grid = _demo_grid(selected)
+    lat = np.asarray(grid["lat"].values, dtype=float)
+    lon = np.asarray(grid["lon"].values, dtype=float)
+
+    slopes: dict[str, np.ndarray] = {}
+    done = 0
+    for name in served:
+        try:
+            slopes[name] = _slope_grid(name)
+        except Exception:  # a variable the source cannot actually produce
+            pass
+        done += 1
+        with _FP_LOCK:
+            if _FP_STATE.get("key") == key:
+                _FP_STATE["progress"] = {"done": done, "total": len(served)}
+
+    if len(slopes) < 2:
+        with _FP_LOCK:
+            if _FP_STATE.get("key") == key:
+                _FP_STATE.update(
+                    status="unavailable",
+                    reason="fewer than two variables could be analysed",
+                )
+        return
+
+    rv = fingerprint.region_vectors(slopes, labels)
+    z, kept = fingerprint.standardize(rv.matrix, rv.variables)
+    rings = fingerprint.region_rings(labels, lat, lon)
+    centroids = _region_centroids(labels, lat, lon, rv.region_ids)
+
+    with _FP_LOCK:
+        if _FP_STATE.get("key") == key:
+            _FP_STATE.update(
+                status="ready",
+                reason=None,
+                progress={"done": len(served), "total": len(served)},
+                labels=labels,
+                lat=lat,
+                lon=lon,
+                region_ids=rv.region_ids,
+                vectors=rv.matrix,
+                usable=rv.usable,
+                variables=rv.variables,
+                z=z,
+                kept=kept,
+                rings=rings,
+                centroids=centroids,
+            )
+
+
+def _start_fingerprint_thread(key, selected: str, served: list[str], labels: np.ndarray) -> None:
+    threading.Thread(
+        target=_fingerprint_refresh,
+        args=(key, selected, served, labels),
+        daemon=True,
+    ).start()
+
+
+def _nearest_region_row(
+    labels: np.ndarray,
+    lat: np.ndarray,
+    lon: np.ndarray,
+    lat0: float,
+    lon0: float,
+    region_ids: list[int],
+    centroids: dict[int, tuple[float, float]],
+) -> int | None:
+    """Row index of the region under the click, or the nearest centroid.
+
+    The click is snapped because a fingerprint request lands on whatever pixel
+    the user hit, while regions are patch-shaped; nearest-centroid keeps the
+    answer meaningful when the click falls just outside a patch.
+    """
+    if not region_ids:
+        return None
+
+    if np.isfinite(lat0) and np.isfinite(lon0):
+        i = int(np.abs(lat - lat0).argmin())
+        # Compare longitudes on the shorter way round, so the seam at 180
+        # degrees does not look like half a world away.
+        wrapped = np.abs(((lon - lon0 + 180.0) % 360.0) - 180.0)
+        j = int(wrapped.argmin())
+        label = int(labels[i, j])
+        if label in centroids:
+            return region_ids.index(label)
+
+    if not centroids:
+        return 0
+    target = min(
+        centroids.values(),
+        key=lambda c: (c[0] - lat0) ** 2
+        + (((c[1] - lon0 + 180.0) % 360.0) - 180.0) ** 2,
+    )
+    for region_id, centroid in centroids.items():
+        if centroid == target:
+            return region_ids.index(region_id)
+    return 0
+
+
+def _fingerprint_payload(state: dict, lat: float, lon: float, k: int) -> dict:
+    """Build the ready response: the reference region and its nearest twins."""
+    region_ids = state["region_ids"]
+    vectors = state["vectors"]
+    variables = state["variables"]
+    kept = state["kept"]
+    centroids = state["centroids"]
+    rings = state["rings"]
+    usable = state["usable"]
+    z = state["z"]
+
+    def vector_of(row: int) -> dict:
+        return {
+            name: (None if not np.isfinite(vectors[row, col]) else round(float(vectors[row, col]), 6))
+            for col, name in enumerate(variables)
+        }
+
+    def describe(row: int, distance: float | None = None) -> dict:
+        region_id = region_ids[row]
+        centroid = centroids.get(region_id, (0.0, 0.0))
+        item = {
+            "region_id": region_id,
+            "lat": round(centroid[0], 4),
+            "lon": round(centroid[1], 4),
+            "vector": vector_of(row),
+            "usable": int(usable[row]),
+            "rings": rings.get(region_id, []),
+        }
+        if distance is not None:
+            item["distance"] = round(distance, 4)
+        return item
+
+    row = _nearest_region_row(
+        state["labels"], state["lat"], state["lon"], lat, lon, region_ids, centroids
+    )
+    if row is None:
+        return {"reference": None, "matches": []}
+
+    reference = describe(row)
+    reference["standardized"] = {
+        name: (
+            None if not np.isfinite(z[row, col]) else round(float(z[row, col]), 4)
+        )
+        for col, name in enumerate(kept)
+    }
+
+    matches = [
+        describe(hit_row, distance)
+        for hit_row, distance in fingerprint.nearest(z, row, k)
+    ]
+    return {"reference": reference, "matches": matches, "kept": kept}
+
+
+@app.get("/fingerprint/{variable}")
+def get_fingerprint(
+    variable: str,
+    lat: float = 0.0,
+    lon: float = 0.0,
+    k: int = 5,
+) -> dict:
+    """Regions elsewhere on the map whose trends look like the one you clicked.
+
+    The first call starts a background build and reports progress; later calls
+    return the reference region, its nearest matches, and the outlines to draw.
+    """
+    served = _served_variables()
+    if variable not in served:
+        raise HTTPException(
+            status_code=404,
+            detail=f"data source {type(_SOURCE).__name__} cannot serve {variable!r}",
+        )
+
+    base = {
+        "progress": {"done": 0, "total": len(served)},
+        "reference": None,
+        "matches": [],
+        "variables": list(served),
+    }
+
+    if len(served) < 2:
+        return {
+            **base,
+            "status": "unavailable",
+            "reason": "a fingerprint needs at least two served variables",
+        }
+
+    labels, reason = _region_labels(variable)
+    if labels is None:
+        return {**base, "status": "ready", "reason": reason}
+
+    key = (variable, tuple(served))
+    start = False
+    with _FP_LOCK:
+        if _FP_STATE.get("key") != key:
+            _FP_STATE.clear()
+            _FP_STATE.update(
+                key=key,
+                status="preparing",
+                reason=None,
+                progress={"done": 0, "total": len(served)},
+                labels=labels,
+                variables=list(served),
+            )
+            start = True
+        snapshot = dict(_FP_STATE)
+
+    if start:
+        # Start outside the lock: the builder takes the same lock to report
+        # progress, and a synchronous test double would otherwise deadlock.
+        _start_fingerprint_thread(key, variable, served, labels)
+        with _FP_LOCK:
+            snapshot = dict(_FP_STATE)
+
+    if snapshot["status"] == "preparing":
+        return {**base, "status": "preparing", "progress": snapshot["progress"]}
+
+    if snapshot["status"] == "unavailable":
+        return {
+            **base,
+            "status": "unavailable",
+            "reason": snapshot.get("reason"),
+            "progress": snapshot["progress"],
+        }
+
+    return {
+        **base,
+        "status": "ready",
+        "reason": None,
+        "progress": snapshot["progress"],
+        "variables": snapshot["variables"],
+        **_fingerprint_payload(snapshot, lat, lon, k),
+    }
 
 
 @app.get("/demo/{variable}")

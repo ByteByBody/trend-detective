@@ -268,3 +268,57 @@ def test_demo_serialises_undefined_diagnostics_as_null(flat_source):
     assert body["threshold"] == 0.0
     assert body["n_naive"] == 0
     assert body["n_corrected"] == 0
+
+
+def test_fingerprint_reports_unavailable_with_one_variable(monkeypatch):
+    monkeypatch.setattr(app_module, "_served_variables", lambda: ["surface_temperature"])
+    r = client.get("/fingerprint/surface_temperature?lat=0&lon=0&k=3")
+    assert r.status_code == 200
+    assert r.json()["status"] == "unavailable"
+
+
+def test_fingerprint_says_so_when_there_are_no_regions(monkeypatch):
+    # Review Focus 1: precipitation can correct to an empty patch set.
+    monkeypatch.setattr(app_module, "_served_variables", lambda: ["a", "b"])
+    monkeypatch.setattr(
+        app_module,
+        "_region_labels",
+        lambda v: (None, "no corrected patches for this variable"),
+    )
+    r = client.get("/fingerprint/a?lat=0&lon=0&k=3")
+    assert r.json()["status"] in {"preparing", "ready"}
+    assert r.json()["reason"] and "patch" in r.json()["reason"].lower()
+
+
+def test_fingerprint_ready_payload_lists_reference_and_matches(monkeypatch):
+    labels = np.array([[1, 1, 0], [0, 0, 2]])
+    slopes = {
+        "a": np.array([[1.0, 3.0, 0.0], [0.0, 0.0, 8.0]]),
+        "b": np.array([[10.0, 20.0, 0.0], [0.0, 0.0, 50.0]]),
+    }
+    grid = xr.DataArray(
+        np.zeros((24, 2, 3)),
+        dims=("time", "lat", "lon"),
+        coords={"time": np.arange(24), "lat": [0.0, -1.0], "lon": [0.0, 1.0, 2.0]},
+    )
+    monkeypatch.setattr(app_module, "_served_variables", lambda: ["a", "b"])
+    monkeypatch.setattr(app_module, "_region_labels", lambda v: (labels, None))
+
+    def fake_grid(variable):
+        return grid
+
+    fake_grid.cache_clear = lambda: None
+    monkeypatch.setattr(app_module, "_demo_grid", fake_grid)
+    monkeypatch.setattr(app_module, "_slope_grid", lambda v: slopes[v])
+    monkeypatch.setattr(
+        app_module,
+        "_start_fingerprint_thread",
+        lambda *args: app_module._fingerprint_refresh(*args),
+    )
+    r = client.get("/fingerprint/a?lat=0&lon=0&k=1")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "ready"
+    assert body["reference"]["region_id"] == 1
+    assert body["matches"][0]["region_id"] == 2
+    assert body["matches"][0]["rings"]  # an outline travels with the match
