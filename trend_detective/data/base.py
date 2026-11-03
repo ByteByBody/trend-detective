@@ -14,7 +14,7 @@ from typing import Protocol
 
 import xarray as xr
 
-from trend_detective import config
+from trend_detective import catalog, config
 from trend_detective.data import power, sample
 
 
@@ -56,11 +56,27 @@ class SyntheticSource:
         da.attrs = dict(da.attrs, variable=variable)
         return da
 
+    def variables(self) -> list[str]:
+        """The generator can fabricate every variable in the catalog."""
+        return list(catalog.VARIABLES)
+
 
 _SOURCES: dict[str, type] = {
     "synthetic": SyntheticSource,
     "power": power.PowerRegionalSource,
 }
+
+
+def available_variables(source: DatasetSource) -> list[str]:
+    """Variables ``source`` can serve, in catalog order.
+
+    A source that carries only a subset exposes ``variables()``; one without it
+    is assumed to serve the whole catalog.
+    """
+    lister = getattr(source, "variables", None)
+    if callable(lister):
+        return list(lister())
+    return list(catalog.VARIABLES)
 
 
 def get_source(name: str) -> DatasetSource:

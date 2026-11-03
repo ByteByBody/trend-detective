@@ -28,7 +28,7 @@ DEMO_GRID = (30, 60)
 DEMO_AUTOCORR = 0.5
 
 #: Data source used by the API when none is configured.
-DATA_SOURCE = "synthetic"
+DATA_SOURCE = "power"
 
 #: Live NASA POWER source: bounding box as (lat_min, lat_max, lon_min, lon_max).
 #: Default is a Greenland box (cryosphere, long MERRA-2 record).

@@ -137,6 +137,10 @@ def test_power_source_is_registered():
     assert isinstance(base.get_source("power"), power.PowerRegionalSource)
 
 
+def test_power_source_advertises_exactly_its_mapped_parameters():
+    assert set(power.PowerRegionalSource().variables()) == set(power.PARAMETERS)
+
+
 def test_parsed_power_grid_runs_through_the_pipeline():
     months = [f"{2020 + k // 12}{k % 12 + 1:02d}" for k in range(48)]
     features = []

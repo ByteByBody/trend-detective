@@ -25,6 +25,22 @@ def test_unknown_source_raises_keyerror():
         base.get_source("nope")
 
 
+def test_synthetic_source_serves_the_whole_catalog():
+    from trend_detective import catalog
+
+    assert set(base.get_source("synthetic").variables()) == set(catalog.VARIABLES)
+
+
+def test_source_without_a_variables_method_is_assumed_to_serve_the_catalog():
+    from trend_detective import catalog
+
+    class Bare:
+        def load(self, variable):  # pragma: no cover - protocol shim
+            raise NotImplementedError
+
+    assert set(base.available_variables(Bare())) == set(catalog.VARIABLES)
+
+
 def test_earthdata_stub_is_not_implemented():
     with pytest.raises(NotImplementedError):
         fetch.EarthdataSource().load("soil_moisture_rootzone")

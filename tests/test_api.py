@@ -37,9 +37,46 @@ def flat_source(monkeypatch):
     app_module._demo_body.cache_clear()
 
 
+class _PrecipOnlySource:
+    """A source that serves a single variable, like POWER does."""
+
+    def variables(self) -> list[str]:
+        return ["precipitation"]
+
+    def load(self, variable: str) -> xr.DataArray:
+        return _FlatSource().load(variable)
+
+
+@pytest.fixture
+def precip_only_source(monkeypatch):
+    monkeypatch.setattr(app_module, "_SOURCE", _PrecipOnlySource())
+    app_module._demo_grid.cache_clear()
+    app_module._demo_body.cache_clear()
+    yield
+    app_module._demo_grid.cache_clear()
+    app_module._demo_body.cache_clear()
+
+
 def test_catalog_endpoint():
     r = client.get("/catalog")
     assert r.status_code == 200 and isinstance(r.json(), list) and r.json()
+
+
+def test_catalog_lists_only_variables_the_source_serves(precip_only_source):
+    keys = [v["key"] for v in client.get("/catalog").json()]
+    assert keys == ["precipitation"]
+
+
+def test_demo_for_an_unserved_variable_is_404(precip_only_source):
+    r = client.get("/demo/surface_temperature")
+
+    assert r.status_code == 404
+    detail = r.json()["detail"]
+    assert "surface_temperature" in detail and "precipitation" in detail
+
+
+def test_timeseries_for_an_unserved_variable_is_404(precip_only_source):
+    assert client.get("/timeseries/surface_temperature?lat=0&lon=0").status_code == 404
 
 
 def test_demo_endpoint_shape():

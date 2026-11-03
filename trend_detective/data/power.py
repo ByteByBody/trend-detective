@@ -188,3 +188,7 @@ class PowerRegionalSource:
         da = da.sortby("lat", ascending=False).sortby("lon", ascending=True)
         da.attrs = dict(da.attrs, variable=variable, source=SOURCE_NAME)
         return da
+
+    def variables(self) -> list[str]:
+        """Only the catalog variables that map onto a POWER parameter."""
+        return list(PARAMETERS)

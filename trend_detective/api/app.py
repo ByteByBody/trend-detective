@@ -33,6 +33,29 @@ def _demo_grid(variable: str):
     return _SOURCE.load(variable)
 
 
+def _served_variables() -> list[str]:
+    """Variables the active source can actually produce."""
+    return data_source.available_variables(_SOURCE)
+
+
+def _require_served(variable: str) -> None:
+    """404 unless ``variable`` is known *and* the active source can serve it."""
+    try:
+        catalog.get_variable(variable)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"unknown variable: {variable!r}") from None
+
+    served = _served_variables()
+    if variable not in served:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"data source {type(_SOURCE).__name__} cannot serve {variable!r}; "
+                f"available: {served}"
+            ),
+        )
+
+
 @lru_cache(maxsize=None)
 def _demo_body(variable: str) -> dict:
     """Run the cry-wolf pipeline once per variable and cache the JSON body."""
@@ -66,7 +89,8 @@ def _demo_body(variable: str) -> dict:
 
 @app.get("/catalog")
 def get_catalog() -> list[dict]:
-    """List the studyable variables and their metadata."""
+    """List the variables the active source can serve, with their metadata."""
+    served = set(_served_variables())
     return [
         {
             "key": v.key,
@@ -75,17 +99,15 @@ def get_catalog() -> list[dict]:
             "source": v.source,
             "description": v.description,
         }
-        for v in catalog.VARIABLES.values()
+        for key, v in catalog.VARIABLES.items()
+        if key in served
     ]
 
 
 @app.get("/demo/{variable}")
 def get_demo(variable: str) -> dict:
     """Cry-wolf result for a variable: naive vs field-significance-corrected."""
-    try:
-        catalog.get_variable(variable)
-    except KeyError:
-        raise HTTPException(status_code=404, detail=f"unknown variable: {variable!r}")
+    _require_served(variable)
     return _demo_body(variable)
 
 
@@ -96,10 +118,7 @@ def get_timeseries(
     lon: float = Query(...),
 ) -> dict:
     """Return the nearest-cell monthly series for a variable."""
-    try:
-        catalog.get_variable(variable)
-    except KeyError:
-        raise HTTPException(status_code=404, detail=f"unknown variable: {variable!r}")
+    _require_served(variable)
 
     if not (np.isfinite(lat) and np.isfinite(lon)):
         raise HTTPException(status_code=422, detail="lat and lon must be finite")

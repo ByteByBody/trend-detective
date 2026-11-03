@@ -27,22 +27,26 @@ test rejects, while keeping every injected real patch.
 
 ## Real data
 
-The bundled synthetic grid is the default because it carries known ground truth.
-A **live NASA source needs no key**: `PowerRegionalSource`
-(`trend_detective/data/power.py`) pulls MERRA-2 monthly means from the POWER
-regional endpoint. Switch with one setting in `trend_detective/config.py`:
+`DATA_SOURCE` selects the source the API serves from, and **ships as `"power"`**:
+`PowerRegionalSource` (`trend_detective/data/power.py`) pulls live MERRA-2 monthly
+means from NASA's POWER regional endpoint with no API key. Set it to `"synthetic"`
+for the instant offline demo (bundled grid with known ground truth).
 
 ```python
-DATA_SOURCE = "power"          # default is "synthetic"
+DATA_SOURCE = "power"          # or "synthetic" for the offline demo
 POWER_BBOX = (60.0, 70.0, -50.0, -40.0)   # lat_min, lat_max, lon_min, lon_max
 POWER_START, POWER_END = 1990, 2024
 ```
 
+The first request per variable fetches from POWER (roughly 11 s warm, up to ~90 s
+cold) and is cached; the page then reloads instantly.
+
 The endpoint caps a request at 10° per axis and one parameter, so the client tiles
 large boxes and stitches the responses. Only variables whose POWER units match the
-catalog are mapped (`surface_temperature` → `T2M`, `precipitation` → `PRECTOTCORR`);
-anything else raises rather than substituting a different quantity. Details and
-measured runs: `docs/algorithms.md` section 9.
+catalog are mapped (`surface_temperature` → `T2M`, `precipitation` → `PRECTOTCORR`).
+`/catalog` lists just those, so the UI never offers a variable the source cannot
+produce, and asking for one anyway is a 404 rather than a 500. Details and measured
+runs: `docs/algorithms.md` section 9.
 
 ## Scope (this build)
 

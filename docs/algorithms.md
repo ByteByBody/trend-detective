@@ -233,21 +233,27 @@ count.
 
 ## 8. API mapping — `api/app.py`
 
-- `GET /catalog` → list of `{key,label,units,source,description}` from `catalog.VARIABLES`.
+- `GET /catalog` → list of `{key,label,units,source,description}` from
+  `catalog.VARIABLES`, **filtered to the variables the active source serves**, so
+  the UI can never offer a variable the source cannot produce.
 - `GET /demo/{variable}` → `CryWolfResult` as JSON: `lat`, `lon`, `naive_mask` (0/1),
   `corrected_mask` (0/1), `slope`, plus `threshold`, `n_naive`, `n_corrected`,
-  `n_insufficient`, `morans_i`, `valid_fraction`. Unknown variable → `HTTPException(404)`.
+  `n_insufficient`, `morans_i`, `valid_fraction`. Unknown variable, or one the
+  source cannot serve → `HTTPException(404)` with the available keys in `detail`.
   NaN slopes become `null` (JSON has no NaN).
 - `GET /timeseries/{variable}?lat=&lon=` → nearest-cell `{time, value}`; non-finite
-  coordinates → 422.
+  coordinates → 422; unknown or unserved variable → 404.
 - `GET /` → `web/index.html`; static assets under `/static`.
 
 **Pluggable data layer:** the API reads through `data.base.DatasetSource`
-(`load(variable) -> DataArray`). Sources registered by name: `synthetic`
-(`SyntheticSource`, the default) and `power` (`PowerRegionalSource`, live NASA
-MERRA-2 — see section 9). The deferred `data.fetch.EarthdataSource` still raises
-`NotImplementedError` for GES DISC. Selecting a source is a one-line change to
-`config.DATA_SOURCE` and touches no analysis code.
+(`load(variable) -> DataArray`). Sources registered by name: `power`
+(`PowerRegionalSource`, live NASA MERRA-2 — see section 9) and `synthetic`
+(`SyntheticSource`, the bundled known-truth grid). `config.DATA_SOURCE` selects
+one and ships as `"power"`. A source that carries only a subset also implements
+`variables() -> list[str]`; `base.available_variables(source)` falls back to the
+whole catalog for sources that do not, and the API uses it for both the catalog
+listing and the 404 guard. The deferred `data.fetch.EarthdataSource` still raises
+`NotImplementedError` for GES DISC.
 
 ---
 
@@ -295,7 +301,9 @@ match the catalog metadata, so the API never mislabels a series:
 | `precipitation` | `PRECTOTCORR` | mm/day |
 
 Any other key raises `KeyError` rather than silently substituting a different
-quantity. Defaults (`config.POWER_BBOX/START/END`) are the Greenland box
+quantity, and `PowerRegionalSource.variables()` reports exactly the mapped keys so
+`/catalog` offers only those (requesting an unmapped variable is a 404, never a
+500). Defaults (`config.POWER_BBOX/START/END`) are the Greenland box
 60–70°N, 50–40°W, 1990–2024 → 420 × 21 × 17.
 
 **Measured (live, from a normal connection):** cold fetch 90 s for the box above,
