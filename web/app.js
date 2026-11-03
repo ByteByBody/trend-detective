@@ -16,9 +16,10 @@
     'Imagery &copy; <a href="https://earthdata.nasa.gov/gibs">NASA EOSDIS GIBS</a>';
   const TILE_MAX_NATIVE_ZOOM = 8;
 
-  // Flagged cells are tinted, not painted over: the basemap has to stay
-  // legible underneath, otherwise the panel reads as a colour block.
-  const MASK_ALPHA = 165;
+  // Flagged cells are drawn as small dots, so the basemap stays readable.
+  const DOT_RADIUS = 3;
+  // The slope raster sits beneath the dots as a faint wash of magnitude.
+  const SLOPE_OPACITY = 0.22;
 
   // Viridis stops for the slope ramp.
   const VIRIDIS = [
@@ -35,15 +36,11 @@
     bounds: DEFAULT_BOUNDS,
     maps: { naive: null, corrected: null },
     overlays: { naive: null, corrected: null, marker: null },
+    renderers: { naive: null, corrected: null },
     colors: { naive: "#d6453d", corrected: "#0f7a6b" },
   };
 
   const el = (id) => document.getElementById(id);
-
-  function hexToRgb(hex) {
-    const n = parseInt(hex.slice(1), 16);
-    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-  }
 
   function viridis(t) {
     t = Math.min(1, Math.max(0, t));
@@ -63,30 +60,6 @@
   }
 
   // --- image builders -------------------------------------------------------
-
-  function maskToDataURL(mask, hex) {
-    const ny = mask.length;
-    const nx = mask[0].length;
-    const [r, g, b] = hexToRgb(hex);
-    const canvas = document.createElement("canvas");
-    canvas.width = nx;
-    canvas.height = ny;
-    const ctx = canvas.getContext("2d");
-    const img = ctx.createImageData(nx, ny);
-    for (let i = 0; i < ny; i++) {
-      for (let j = 0; j < nx; j++) {
-        const k = (i * nx + j) * 4;
-        if (mask[i][j]) {
-          img.data[k] = r;
-          img.data[k + 1] = g;
-          img.data[k + 2] = b;
-          img.data[k + 3] = MASK_ALPHA;
-        }
-      }
-    }
-    ctx.putImageData(img, 0, 0);
-    return canvas.toDataURL();
-  }
 
   function slopeToDataURL(slope) {
     const ny = slope.length;
@@ -151,26 +124,41 @@
     return map;
   }
 
-  function drawOverlay(key, dataUrl, opacity) {
+  function drawDots(key, demo, mask, hex) {
     const map = state.maps[key];
     if (!map) return;
-    if (state.overlays[key]) map.removeLayer(state.overlays[key]);
-    state.overlays[key] = L.imageOverlay(dataUrl, state.bounds, {
-      opacity: opacity,
-      interactive: false,
-    }).addTo(map);
+    if (state.overlays[key + "Dots"]) map.removeLayer(state.overlays[key + "Dots"]);
+    // Canvas keeps a few thousand markers cheap to pan and zoom.
+    const renderer = state.renderers[key] || (state.renderers[key] = L.canvas({ padding: 0.4 }));
+    const group = L.layerGroup();
+    demo.lat.forEach((lat, i) => {
+      demo.lon.forEach((lon, j) => {
+        if (!mask[i][j]) return;
+        const dot = L.circleMarker([lat, lon], {
+          renderer: renderer,
+          radius: DOT_RADIUS,
+          weight: 0,
+          fillColor: hex,
+          fillOpacity: 0.9,
+          bubblingMouseEvents: false,
+        });
+        dot.on("click", () => loadSeries(lat, lon));
+        group.addLayer(dot);
+      });
+    });
+    group.addTo(map);
+    state.overlays[key + "Dots"] = group;
   }
 
   function drawSlopeOverlays(shapeUrl) {
-    // Slope sits faintly beneath both masks so pattern and magnitude are visible.
+    // Slope sits faintly beneath the dots so magnitude is still visible.
     ["naive", "corrected"].forEach((key) => {
       const map = state.maps[key];
       if (state.overlays[key + "Slope"]) map.removeLayer(state.overlays[key + "Slope"]);
       state.overlays[key + "Slope"] = L.imageOverlay(shapeUrl, state.bounds, {
-        opacity: 0.55,
+        opacity: SLOPE_OPACITY,
         interactive: false,
       }).addTo(map);
-      if (state.overlays[key]) state.overlays[key].bringToFront();
     });
   }
 
@@ -205,8 +193,8 @@
 
     const slopeImg = slopeToDataURL(demo.slope);
     drawSlopeOverlays(slopeImg.url);
-    drawOverlay("naive", maskToDataURL(demo.naive_mask, state.colors.naive), 0.95);
-    drawOverlay("corrected", maskToDataURL(demo.corrected_mask, state.colors.corrected), 0.95);
+    drawDots("naive", demo, demo.naive_mask, state.colors.naive);
+    drawDots("corrected", demo, demo.corrected_mask, state.colors.corrected);
 
     el("tally-naive").textContent = `${fmtInt(demo.n_naive)} pixels flagged`;
     el("tally-corrected").textContent = `${fmtInt(demo.n_corrected)} pixels flagged`;
@@ -268,6 +256,30 @@
       }
     }
     return { lat: demo.lat[bi], lon: demo.lon[bj] };
+  }
+
+  function nearestDot(key, latlng) {
+    // The closest *flagged* cell to the cursor, so a click between dots still
+    // selects a dot rather than an unflagged cell under the pointer.
+    const demo = state.demo;
+    if (!demo) return null;
+    const mask = key === "naive" ? demo.naive_mask : demo.corrected_mask;
+    const scale = Math.cos((latlng.lat * Math.PI) / 180);
+    let best = null;
+    let bestD = Infinity;
+    demo.lat.forEach((lat, i) => {
+      demo.lon.forEach((lon, j) => {
+        if (!mask[i][j]) return;
+        const dLat = lat - latlng.lat;
+        const dLon = (lon - latlng.lng) * scale;
+        const d = dLat * dLat + dLon * dLon;
+        if (d < bestD) {
+          bestD = d;
+          best = { lat: lat, lon: lon };
+        }
+      });
+    });
+    return best;
   }
 
   async function loadSeries(lat, lon) {
@@ -391,7 +403,15 @@
     state.maps.corrected = makeMap("map-corrected");
     ["naive", "corrected"].forEach((key) => {
       const map = state.maps[key];
-      map.on("click", (e) => loadSeries(e.latlng.lat, e.latlng.lng));
+      map.on("click", (e) => {
+        const dot = nearestDot(key, e.latlng);
+        if (dot) {
+          loadSeries(dot.lat, dot.lon);
+        } else {
+          // A panel with nothing flagged still answers, at the nearest cell.
+          loadSeries(e.latlng.lat, e.latlng.lng);
+        }
+      });
       // Keyboard path for the same action: read the cell at the map centre.
       const node = el("map-" + key);
       if (node) {

@@ -1,5 +1,3 @@
-import re
-
 from fastapi.testclient import TestClient
 
 from trend_detective.api import app as app_module
@@ -80,12 +78,25 @@ def test_app_js_attributes_the_data_to_its_source():
     assert "demo.source" in js
 
 
-def test_flagged_pixels_stay_translucent_so_the_map_shows_through():
-    # At 235/255 alpha the red and green slabs hid every coastline: the panels
-    # read as coloured blobs, not as a map with regions flagged on it.
-    match = re.search(r"const MASK_ALPHA = (\d+)", client.get("/static/app.js").text)
-    assert match, "MASK_ALPHA is not a named constant"
-    assert 100 <= int(match.group(1)) <= 190
+def test_flagged_cells_are_drawn_as_dots_not_filled_cells():
+    # Solid 5-degree blocks painted over the imagery; the map disappeared under
+    # them. A dot per flagged cell leaves the basemap readable.
+    js = client.get("/static/app.js").text
+    assert "L.circleMarker" in js
+    assert "maskToDataURL" not in js
+
+
+def test_each_dot_can_be_clicked():
+    js = client.get("/static/app.js").text
+    assert 'dot.on("click"' in js
+
+
+def test_a_missed_click_snaps_to_the_nearest_dot():
+    # Clicking between dots should still land on a flagged cell, not on the
+    # grid cell under the cursor, which may not be flagged at all.
+    js = client.get("/static/app.js").text
+    assert "function nearestDot(key, latlng)" in js
+    assert "nearestDot(key, e.latlng)" in js
 
 
 def test_map_panels_are_square():

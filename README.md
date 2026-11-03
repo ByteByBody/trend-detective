@@ -97,5 +97,10 @@ Run the web app (serves the maps at `/`):
 python -m uvicorn trend_detective.api.app:app --reload
 ```
 
+The two panels are square Leaflet maps over NASA GIBS Blue Marble imagery, and
+every flagged cell is a dot: red for the naive verdict, green for the corrected
+one. Click any dot to plot that cell's monthly series; a click between dots
+selects the nearest flagged cell, so a near miss still reads the right place.
+
 `GET /health` returns `{"status": "ok"}` without touching the data source, so a
 probe never fails just because a cold fetch is in progress.
