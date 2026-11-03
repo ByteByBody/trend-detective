@@ -194,3 +194,18 @@ def test_app_js_keeps_the_world_reachable():
     # the only bounds clamp left is the initial world one.
     js = client.get("/static/app.js").text
     assert js.count("setMaxBounds") == 1
+
+
+def test_stylesheet_defines_the_instrument_tokens():
+    css = client.get("/static/styles.css").text
+    for token in ("--paper", "--ink-2", "--rule", "--signal", "--readout"):
+        assert token in css
+    assert "#E9EDF2" in css
+
+
+def test_page_loads_the_three_type_roles():
+    html = client.get("/").text
+    assert "Instrument+Sans" in html
+    assert "Source+Serif+4" in html
+    assert "IBM+Plex+Mono" in html
+    assert "Space+Grotesk" not in html

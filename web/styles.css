@@ -2,21 +2,31 @@
    Palette is grounded in NASA brand blue; warm = false alarm, teal = confirmed. */
 
 :root {
-  --paper: #eef1f5;
-  --paper-2: #e4e8ee;
-  --grid: #d5dbe3;
-  --ink: #131a2a;
-  --ink-soft: #566074;
-  --brand: #0b3d91;
-  --brand-bright: #2e6fd6;
-  --naive: #d6453d;
-  --naive-soft: #f6dfdd;
-  --corrected: #0f7a6b;
-  --corrected-soft: #d8ece7;
-  --line: #c7ceda;
+  /* Instrument palette (spec §6). */
+  --paper: #E9EDF2;
+  --panel: #FFFFFF;
+  --ink: #0E1524;
+  --ink-2: #5A6473;
+  --rule: #C3CBD6;
+  --naive: #D33B30;
+  --corrected: #0C7A66;
+  --signal: #1B3A6B;
 
-  --display: "Space Grotesk", system-ui, sans-serif;
-  --prose: "Spectral", Georgia, serif;
+  /* Three type roles: UI, prose, and numeric readouts. */
+  --ui: "Instrument Sans", system-ui, sans-serif;
+  --prose: "Source Serif 4", Georgia, serif;
+  --readout: "IBM Plex Mono", ui-monospace, monospace;
+
+  /* Legacy names still referenced by rules Task 15 restyles. */
+  --paper-2: #E4E8EE;
+  --grid: #D5DBE3;
+  --ink-soft: var(--ink-2);
+  --brand: var(--signal);
+  --brand-bright: #2E6FD6;
+  --naive-soft: #F6DFDD;
+  --corrected-soft: #D8ECE7;
+  --line: var(--rule);
+  --display: var(--ui);
 
   --gutter: clamp(1rem, 3vw, 2.5rem);
   --radius: 3px;
@@ -33,7 +43,7 @@ body {
   background-image:
     linear-gradient(var(--grid) 1px, transparent 1px),
     linear-gradient(90deg, var(--grid) 1px, transparent 1px);
-  background-size: 28px 28px;
+  background-size: 24px 24px;
   background-position: -1px -1px;
   font-family: var(--display);
   font-size: 16px;
