@@ -192,7 +192,9 @@ main { padding: 0 var(--gutter); }
 }
 
 .map {
-  height: clamp(240px, 38vh, 360px);
+  /* The grid spans the whole Mercator world, which is square: a square window
+     is the only shape the raster fills exactly, without letterboxing or crop. */
+  aspect-ratio: 1 / 1;
   background: var(--paper-2);
 }
 

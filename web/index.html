@@ -96,11 +96,13 @@
   </main>
 
   <footer class="foot">
+    <p id="foot-data">
+      <span id="data-source"></span>
+    </p>
     <p>
-      Synthetic grid with a known answer, so the false alarms can be counted.
       Correction: Benjamini–Hochberg FDR at q = 0.05, then connected patches of
-      five pixels or more. Autocorrelation handled with a Hamed–Rao variance
-      correction.
+      five pixels or more survive. Autocorrelation is handled with a Hamed–Rao
+      variance correction, and seasonality is removed month by month first.
     </p>
   </footer>
 

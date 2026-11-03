@@ -1,3 +1,5 @@
+import re
+
 from fastapi.testclient import TestClient
 
 from trend_detective.api import app as app_module
@@ -62,6 +64,58 @@ def test_favicon_is_served_as_svg():
     assert r.status_code == 200
     assert "svg" in r.headers["content-type"]
     assert "<svg" in r.text
+
+
+def test_index_does_not_claim_the_bundled_sample_when_serving_live_data():
+    # The footer used to say "Synthetic grid with a known answer" even while
+    # serving NOAA reanalysis.
+    html = client.get("/").text
+    assert "Synthetic grid with a known answer" not in html
+    assert 'id="data-source"' in html
+
+
+def test_app_js_attributes_the_data_to_its_source():
+    js = client.get("/static/app.js").text
+    assert "data-source" in js
+    assert "demo.source" in js
+
+
+def test_flagged_pixels_stay_translucent_so_the_map_shows_through():
+    # At 235/255 alpha the red and green slabs hid every coastline: the panels
+    # read as coloured blobs, not as a map with regions flagged on it.
+    match = re.search(r"const MASK_ALPHA = (\d+)", client.get("/static/app.js").text)
+    assert match, "MASK_ALPHA is not a named constant"
+    assert 100 <= int(match.group(1)) <= 190
+
+
+def test_map_panels_are_square():
+    # The grid covers the same -180..180 / -90..90 extent as the Web Mercator
+    # world, which is square. In a wider window the image either letterboxes or
+    # gets cropped, so the panel has to be square for the raster to fill it.
+    css = client.get("/static/styles.css").text
+    assert "aspect-ratio: 1 / 1" in css
+
+
+def test_map_view_fits_the_world_exactly():
+    js = client.get("/static/app.js").text
+    # Leaflet snaps to whole zoom levels by default, which rounds a fitted view
+    # outward and leaves a margin around the raster. Fractional zoom and a
+    # zero minimum let the world fill the panel at any window width.
+    assert "zoomSnap: 0" in js
+    assert "minZoom: 0" in js
+    assert "padding: [0, 0]" in js
+
+
+def test_app_js_uses_a_keyless_basemap():
+    # CARTO's light_all now answers with a 2 KB "API KEY REQUIRED" watermark, so
+    # the panel showed grey blobs and text instead of a map. NASA GIBS serves
+    # Blue Marble tiles with no key.
+    js = client.get("/static/app.js").text
+    assert "gibs.earthdata.nasa.gov" in js
+    assert "cartocdn" not in js
+    # Blue Marble is published up to level 8; beyond that upscale the same tile
+    # instead of requesting a 404.
+    assert "maxNativeZoom" in js
 
 
 def test_app_js_clamps_overlay_bounds_to_the_world():

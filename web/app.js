@@ -6,10 +6,19 @@
   "use strict";
 
   const DEFAULT_BOUNDS = [[-90, -180], [90, 180]];
-  const TILE_URL = "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png";
+  // NASA GIBS Blue Marble: keyless, and the imagery matches the subject.
+  // CARTO's public basemaps now return a 2 KB "API KEY REQUIRED" watermark.
+  const TILE_URL =
+    "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/" +
+    "BlueMarble_ShadedRelief_Bathymetry/default/GoogleMapsCompatible_Level8/" +
+    "{z}/{y}/{x}.jpeg";
   const TILE_ATTR =
-    '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> ' +
-    '&copy; <a href="https://carto.com/attributions">CARTO</a>';
+    'Imagery &copy; <a href="https://earthdata.nasa.gov/gibs">NASA EOSDIS GIBS</a>';
+  const TILE_MAX_NATIVE_ZOOM = 8;
+
+  // Flagged cells are tinted, not painted over: the basemap has to stay
+  // legible underneath, otherwise the panel reads as a colour block.
+  const MASK_ALPHA = 165;
 
   // Viridis stops for the slope ramp.
   const VIRIDIS = [
@@ -71,7 +80,7 @@
           img.data[k] = r;
           img.data[k + 1] = g;
           img.data[k + 2] = b;
-          img.data[k + 3] = 235;
+          img.data[k + 3] = MASK_ALPHA;
         }
       }
     }
@@ -124,13 +133,20 @@
     const map = L.map(id, {
       center: [12, 0],
       zoom: 1,
-      minZoom: 1,
+      minZoom: 0,
       maxZoom: 12,
+      // Whole-number zoom rounds a fitted view outward and leaves a margin
+      // around the raster. Fractional zoom makes the world fill the panel.
+      zoomSnap: 0,
       worldCopyJump: false,
       attributionControl: true,
       zoomControl: true,
     });
-    L.tileLayer(TILE_URL, { attribution: TILE_ATTR, noWrap: true }).addTo(map);
+    L.tileLayer(TILE_URL, {
+      attribution: TILE_ATTR,
+      noWrap: true,
+      maxNativeZoom: TILE_MAX_NATIVE_ZOOM,
+    }).addTo(map);
     map.setMaxBounds(DEFAULT_BOUNDS);
     return map;
   }
@@ -184,7 +200,7 @@
     Object.values(state.maps).forEach((map) => {
       // Fit the view to the data, but leave the world reachable: a regional
       // source covers a box, and clamping the map to it hides everything else.
-      map.fitBounds(state.bounds, { padding: [8, 8] });
+      map.fitBounds(state.bounds, { padding: [0, 0] });
     });
 
     const slopeImg = slopeToDataURL(demo.slope);
@@ -218,6 +234,13 @@
     const unit = demo.units ? ` ${demo.units}/mo` : " per month";
     el("slope-min").textContent = slopeImg.min.toExponential(1);
     el("slope-max").textContent = slopeImg.max.toExponential(1) + unit;
+
+    const source = el("data-source");
+    if (source) {
+      source.textContent = demo.source
+        ? `Data: ${demo.source}, monthly means over 1980–2024, 5° grid.`
+        : "";
+    }
   }
 
   function renderError(message) {
