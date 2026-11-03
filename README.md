@@ -55,8 +55,21 @@ POWER_START, POWER_END = 1990, 2024
 
 POWER's regional endpoint is capped at **10°×10° per request**, so it cannot cover
 a world map: the shipped default is a Greenland box. `power` maps
-`surface_temperature` → `T2M` and `precipitation` → `PRECTOTCORR`; `psl` maps
-`surface_temperature` → the NCEP air-temperature grid. `/catalog` lists only what
+`surface_temperature` → `T2M` and `precipitation` → `PRECTOTCORR`. `psl` serves
+all five catalog variables — air temperature, precipitation rate, snow water
+equivalent, 10–200 cm soil moisture, and latent heat flux — and converts each
+file's raw units to the catalog's units at the source boundary, so nothing
+downstream ever sees a mixed-unit field:
+
+| variable | PSL file units | conversion | catalog units |
+| --- | --- | --- | --- |
+| `surface_temperature` | °C | identity | °C |
+| `snow_water_equivalent` | kg/m² | identity | mm |
+| `precipitation` | kg/m²/s | × 86,400 | mm/day |
+| `soil_moisture_rootzone` | fraction | × 1000 × 1.9 m | kg/m² |
+| `evapotranspiration` | W/m² | ÷ 2.5×10⁶ × 86,400 | mm/day |
+
+`/catalog` lists only what
 the active source serves, so the UI never offers a variable that would fail, and
 reports the source that actually produced it (`psl` says NOAA, not MERRA-2).
 
@@ -74,10 +87,12 @@ Delete `data/cache/` to force a fresh download.
 ## Scope (this build)
 
 Cry-wolf slice only. The Earthdata-login fetcher (`trend_detective/data/fetch.py`,
-GES DISC) and the trend-fingerprint search are deferred behind a pluggable
-data-source interface (`trend_detective/data/base.py`). Seasonality removal
-defaults to the per-calendar-month climatology method; STL is used automatically
-when `statsmodels` is installed.
+GES DISC) is deferred behind a pluggable data-source interface
+(`trend_detective/data/base.py`). Seasonality removal defaults to the
+per-calendar-month climatology method; STL is used automatically when
+`statsmodels` is installed. Trend fingerprints compare regions across all served
+variables with an **exact** nearest-neighbour search: at a few dozen regions the
+HNSW index the original design anticipated buys nothing, so it stays deferred.
 
 ## Development
 
@@ -100,9 +115,18 @@ python -m uvicorn trend_detective.api.app:app --reload
 The two panels are square Leaflet maps over NASA GIBS Blue Marble imagery. The
 naive panel marks only the pixels it is being accused of: the ones the raw test
 flags and the corrected test drops — 49 of 2,014 on the shipped PSL defaults.
-The corrected panel has nothing left to mark, which is the point. Click any dot
-to plot that cell's monthly series; a click between dots selects the nearest
-marked cell, so a near miss still reads the right place.
+The corrected panel has nothing left to mark, which is the point. Hover a dot for
+its trend and p-value; click any dot to plot that cell's monthly series, and a
+click between dots selects the nearest marked cell, so a near miss still reads
+the right place.
+
+Every number on the page carries its own unit, thousands are separated, and
+trends are quoted **per decade** (the monthly slope × 120) rather than per month;
+scientific notation never reaches the screen. The masthead's stripe band is the
+selected variable's global annual anomaly, one year per stripe. Trend fingerprint
+mode outlines the region you clicked and its nearest neighbours across all five
+variables, polling a background build on the first run and snapping map clicks to
+region centres.
 
 `GET /health` returns `{"status": "ok"}` without touching the data source, so a
 probe never fails just because a cold fetch is in progress.

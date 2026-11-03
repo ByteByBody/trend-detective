@@ -241,11 +241,22 @@ count.
   `provenance(variable) -> str`; the rest fall back to `Variable.source`. Without
   this, PSL air temperature is served under the catalog's `MERRA-2`/`GLDAS` label.
 - `GET /demo/{variable}` → `CryWolfResult` as JSON: `lat`, `lon`, `naive_mask` (0/1),
-  `corrected_mask` (0/1), `slope`, plus `units`, `source` (same provenance),
+  `corrected_mask` (0/1), `slope`, `p_value` (per-pixel, for the dot hover readout),
+  `annual_anomaly` (one global annual-mean anomaly per whole year, for the stripe
+  band), plus `units`, `source` (same provenance),
   `threshold`, `n_naive`, `n_corrected`, `n_insufficient`, `morans_i`,
   `valid_fraction`. Unknown variable, or one the source cannot serve →
   `HTTPException(404)` with the available keys in `detail`. NaN slopes become
   `null` (JSON has no NaN).
+- `GET /fingerprint/{variable}?lat=&lon=&k=` → the region under the click and its
+  nearest twins across all served variables. The first call starts a background
+  build and returns `status="preparing"` with `progress {done,total}`; later
+  calls return `status="ready"` with `reference`, `matches` (centroid, standardized
+  distance, raw vector, usable count, rings), `regions` (every patch centroid, for
+  click-snapping), and `kept` (the variables that survived standardization).
+  `status="unavailable"` when fewer than two variables can be analysed or the
+  source cannot serve the variable; `reason` explains either. Fewer than two
+  served variables → `unavailable` without starting a build.
 - `GET /timeseries/{variable}?lat=&lon=` → nearest-cell `{time, value}` plus
   `time_kind` and `time_labels`; non-finite coordinates → 422; unknown or unserved
   variable → 404. `time_kind` is `"calendar"` when the source carries real months
@@ -352,7 +363,26 @@ extract_grid:
   transpose("time","lat","lon")
   sortby lat descending, lon ascending           # north-up, like every source
   time = year*100 + month                        # YYYYMM ints, time_kind="calendar"
+  convert raw file units -> catalog units         # CONVERSIONS[name], see below
 ```
+
+**Units are converted at the source boundary.** Five catalog variables share one
+source, and three of the files do not use the catalog's units. Converting in
+`extract_grid` (rather than in the UI or the pipeline) means every other layer —
+the chart, the slope map, the fingerprint vectors — can assume catalog units.
+The cached file keeps PSL's raw numbers, so re-extracting never double-converts.
+
+| catalog variable | PSL variable | file units | conversion | catalog units | check |
+| --- | --- | --- | --- | --- | --- |
+| `surface_temperature` | `air` | °C | identity | °C | — |
+| `snow_water_equivalent` | `weasd` | kg/m² | identity | mm | 1 kg/m² of water = 1 mm |
+| `precipitation` | `prate` | kg/m²/s | × 86,400 | mm/day | July ITCZ 6.8e-5 → 5.9 mm/day |
+| `soil_moisture_rootzone` | `soilw` | fraction | × 1000 × 1.9 m | kg/m² | Amazon 0.26 → 494 kg/m² |
+| `evapotranspiration` | `lhtfl` | W/m² | ÷ 2.5e6 × 86,400 | mm/day | July tropics +133.6 → 4.6 mm/day, sign kept |
+
+The latent-heat sign is deliberate. The NCEP file is positive upward over the
+warm ocean in July (mean +133.6 W/m²), so it is evaporation, not condensation,
+and flipping it would turn a physical fact into a formatting habit.
 
 **Why NCSS and not the obvious paths.**
 
@@ -409,7 +439,50 @@ source declares rather than the catalog's nominal product.
 
 ---
 
-## 11. Implementation notes / pitfalls
+## 11. Trend fingerprints — `analysis/fingerprint.py`
+
+**Signatures:** `region_vectors(slopes, labels) -> RegionVectors` (frozen
+dataclass: `.matrix` regions×variables, `.variables`, `.usable`, `.region_ids`),
+`standardize(matrix, variables) -> (z, kept)`, `nearest(matrix, key, k) ->
+[(row, distance)]`, and `region_rings(labels, lat, lon) -> {region_id: [ring]}`
+with `ring` a closed list of `[lat, lon]` vertices.
+
+A fingerprint is what a region's trends look like **across every served
+variable at once**. Regions are the connected patches of the selected variable's
+corrected mask (8-connectivity, the same patches the coherence gate already
+found); each region gets a vector whose entries are that variable's mean
+Theil–Sen slope over the patch, in catalog units.
+
+- **A variable contributes only above half coverage.** If fewer than half a
+  region's pixels have a finite slope for a variable, that entry is NaN. One
+  surviving pixel is not a trend; it is a hole in the record.
+- **Regions with fewer than two usable variables are never matched.** The
+  matching distance requires a full vector, so a region missing half its
+  variables cannot be "closest" to the region missing the same half — that would
+  be a fact about the gaps, not the climate.
+- **Standardization is NaN-safe and drops dead columns.** Each variable is
+  z-scored across regions; a constant (or too-sparse) column is dropped instead
+  of dividing by zero, and the kept names are returned for the legend.
+- **The search is exact.** Euclidean distance over standardized vectors, sorted,
+  reference excluded. At a few dozen regions an HNSW index would only add a
+  dependency and an approximation; the original design's HNSW is deferred until
+  the region count makes it worth it.
+- **Rings are walked, not approximated.** `region_rings` collects each region's
+  boundary edges (cell sides facing a non-region cell or the grid edge) with a
+  consistent orientation and chains them into loops, so a two-cell region
+  outlines as one rectangle. Unclosed chains are dropped rather than drawn
+  wrong. No new dependency.
+
+`api/app.py` builds the fingerprint on a daemon thread — five cold variables is
+minutes — keyed on the (selected variable, served set) pair, and reports
+`{"status": "preparing"|"ready"|"unavailable", "progress": {done,total}, ...}`.
+The `/fingerprint` payload carries the reference region, its nearest matches with
+centroids, vectors, and rings, every region centroid for click-snapping, and the
+kept variable names for the "driving variables" legend.
+
+---
+
+## 12. Implementation notes / pitfalls
 
 - **Ties:** if ties exist, MK's no-tie variance is slightly off; acceptable for this slice,
   noted as a limitation. BH ordering must be **stable** so equal p-values give a stable threshold.

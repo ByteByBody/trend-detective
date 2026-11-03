@@ -1,7 +1,8 @@
 """FastAPI service for the Trend Detective cry-wolf demo.
 
 Exposes the variable catalog, a per-variable cry-wolf analysis over a bundled
-synthetic grid, and a per-cell time series. See docs/algorithms.md section 8.
+synthetic grid, a per-cell time series, and the trend-fingerprint search. See
+docs/algorithms.md sections 8 and 11.
 """
 
 from __future__ import annotations
