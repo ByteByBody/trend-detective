@@ -120,3 +120,89 @@ def nearest(matrix: np.ndarray, key: int, k: int) -> list[tuple[int, float]]:
     ]
     pairs.sort(key=lambda pair: pair[1])
     return pairs[: max(0, k)]
+
+
+def _edge_coordinates(axis: np.ndarray) -> np.ndarray:
+    """Cell-edge coordinates along one axis, length ``len(axis) + 1``.
+
+    Edges sit halfway between adjacent cell centres, with the outer edges
+    extended by the same half-step, so latitude may run either direction.
+    """
+    axis = np.asarray(axis, dtype=float)
+    if axis.size < 2:
+        return np.array([axis[0] - 0.5, axis[0] + 0.5]) if axis.size else np.array([])
+    middle = (axis[:-1] + axis[1:]) / 2.0
+    return np.concatenate(
+        ([axis[0] - (axis[1] - axis[0]) / 2.0], middle, [axis[-1] + (axis[-1] - axis[-2]) / 2.0])
+    )
+
+
+def region_rings(
+    labels: np.ndarray, lat: np.ndarray, lon: np.ndarray
+) -> dict[int, list[list[list[float]]]]:
+    """Closed outline rings for every labelled region, as ``[lat, lon]`` lists.
+
+    Boundary edges are walked rather than approximated, so a region that is
+    two cells wide outlines as one rectangle, not as two squares. Edges are
+    directed (counter-clockwise in index space) so chaining never has to guess;
+    any chain that fails to close is dropped rather than drawn wrong.
+    """
+    labels = np.asarray(labels)
+    ny, nx = labels.shape
+    lat_edges = _edge_coordinates(lat)
+    lon_edges = _edge_coordinates(lon)
+    region_ids = sorted(int(v) for v in np.unique(labels) if v != 0)
+
+    def is_region(i: int, j: int, region_id: int) -> bool:
+        return 0 <= i < ny and 0 <= j < nx and int(labels[i, j]) == region_id
+
+    rings: dict[int, list[list[list[float]]]] = {}
+    for region_id in region_ids:
+        edges: list[tuple[tuple[int, int], tuple[int, int]]] = []
+        for i in range(ny):
+            for j in range(nx):
+                if int(labels[i, j]) != region_id:
+                    continue
+                # Corners are indexed (i, j) at the north-west of the cell.
+                if not is_region(i - 1, j, region_id):
+                    edges.append(((i, j), (i, j + 1)))
+                if not is_region(i, j + 1, region_id):
+                    edges.append(((i, j + 1), (i + 1, j + 1)))
+                if not is_region(i + 1, j, region_id):
+                    edges.append(((i + 1, j + 1), (i + 1, j)))
+                if not is_region(i, j - 1, region_id):
+                    edges.append(((i + 1, j), (i, j)))
+
+        by_start: dict[tuple[int, int], list] = {}
+        for edge in edges:
+            by_start.setdefault(edge[0], []).append(edge)
+
+        used: set = set()
+        loops: list[list[list[float]]] = []
+        for edge in edges:
+            if edge in used:
+                continue
+            used.add(edge)
+            loop = [edge[0]]
+            current = edge
+            while True:
+                candidates = [e for e in by_start.get(current[1], []) if e not in used]
+                if not candidates:
+                    break
+                nxt = candidates[0]
+                used.add(nxt)
+                loop.append(nxt[0])
+                current = nxt
+                if current[1] == loop[0]:
+                    loop.append(current[1])
+                    break
+            if len(loop) >= 4 and loop[0] == loop[-1]:
+                loops.append(
+                    [
+                        [float(lat_edges[i]), float(lon_edges[j])]
+                        for i, j in loop
+                    ]
+                )
+        rings[region_id] = loops
+
+    return rings

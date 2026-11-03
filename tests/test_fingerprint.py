@@ -36,3 +36,22 @@ def test_nearest_excludes_the_reference_and_returns_k_rows():
     matrix = np.array([[0.0, 0.0], [0.1, 0.0], [5.0, 5.0]])
     hits = fp.nearest(matrix, key=0, k=1)
     assert hits[0][0] == 1
+
+
+def test_a_single_cell_region_has_a_square_ring():
+    labels = np.array([[0, 0, 0], [0, 1, 0], [0, 0, 0]])
+    lat = np.array([2.0, 1.0, 0.0])
+    lon = np.array([0.0, 1.0, 2.0])
+    rings = fp.region_rings(labels, lat, lon)
+    assert set(rings) == {1}
+    ring = rings[1][0]
+    assert ring[0] == ring[-1]  # closed
+    assert len(ring) == 5  # four corners + close
+
+
+def test_a_two_cell_region_is_one_ring_not_two():
+    labels = np.array([[1, 1, 0], [0, 0, 0]])
+    lat = np.array([1.0, 0.0])
+    lon = np.array([0.0, 1.0, 2.0])
+    rings = fp.region_rings(labels, lat, lon)
+    assert len(rings[1]) == 1
