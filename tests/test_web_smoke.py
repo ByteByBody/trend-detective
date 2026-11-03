@@ -209,3 +209,22 @@ def test_page_loads_the_three_type_roles():
     assert "Source+Serif+4" in html
     assert "IBM+Plex+Mono" in html
     assert "Space+Grotesk" not in html
+
+
+def test_no_scientific_notation_survives_in_app_js():
+    js = client.get("/static/app.js").text
+    assert "toExponential" not in js
+    assert "fmtInt" not in js  # replaced by TDFormat.formatNumber
+
+
+def test_every_stat_label_names_its_unit():
+    html = client.get("/").text
+    for phrase in ("(pixels)", "(p-value)", "Moran's I", "(%)"):
+        assert phrase in html
+
+
+def test_legend_labels_both_ends_with_the_unit_and_a_zero_mark():
+    html = client.get("/").text
+    assert "slope-min" in html and "slope-max" in html and "slope-zero" in html
+    js = client.get("/static/app.js").text
+    assert "MONTHS_PER_DECADE" in js or "formatNumber" in js

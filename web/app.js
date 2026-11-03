@@ -197,9 +197,8 @@
 
   // --- rendering ------------------------------------------------------------
 
-  function fmtInt(n) {
-    return Number(n).toLocaleString("en-US");
-  }
+  const fmt = (value, unit, opts) => TDFormat.formatNumber(value, unit, opts);
+  const MONTHS_PER_DECADE = TDFormat.MONTHS_PER_DECADE;
 
   function renderDemo(demo) {
     state.demo = demo;
@@ -217,34 +216,43 @@
     drawDots("naive", demo, contestedMask(demo), state.colors.naive);
     clearDots("corrected");
 
-    el("tally-naive").textContent = `${fmtInt(demo.n_naive)} pixels flagged`;
-    el("tally-corrected").textContent = `${fmtInt(demo.n_corrected)} pixels flagged`;
+    const units = demo.units || "";
+
+    el("tally-naive").textContent = `${fmt(demo.n_naive, "pixels")} flagged`;
+    el("tally-corrected").textContent = `${fmt(demo.n_corrected, "pixels")} flagged`;
 
     const removed = demo.n_naive - demo.n_corrected;
     el("verdict-line").textContent =
       removed >= 0
-        ? `Cried wolf ${fmtInt(removed)} ${removed === 1 ? "time" : "times"}.`
-        : `Kept ${fmtInt(-removed)} more pixels.`;
+        ? `Cried wolf ${fmt(removed, removed === 1 ? "time" : "times")}.`
+        : `Kept ${fmt(-removed, "pixels")} more.`;
     el("verdict-note").textContent =
       "A false alarm is a pixel the raw per-pixel test calls a trend and the " +
       "corrected test will not stand behind: it fails the field-wide cutoff " +
-      `(p \u2264 ${demo.threshold.toFixed(4)}) or sits alone, outside any patch of five.`;
+      `(p \u2264 ${fmt(demo.threshold, "p", { decimals: 4 })}) or sits alone, ` +
+      "outside any patch of five.";
 
-    el("stat-naive").textContent = fmtInt(demo.n_naive);
-    el("stat-corrected").textContent = fmtInt(demo.n_corrected);
-    el("stat-removed").textContent = `${removed >= 0 ? "-" : "+"}${fmtInt(Math.abs(removed))}`;
-    el("stat-kept").textContent = fmtInt(demo.n_corrected);
-    el("stat-threshold").textContent = demo.threshold.toFixed(4);
-    el("stat-insufficient").textContent = fmtInt(demo.n_insufficient);
+    el("stat-naive").textContent = fmt(demo.n_naive, "pixels");
+    el("stat-corrected").textContent = fmt(demo.n_corrected, "pixels");
+    el("stat-removed").textContent = fmt(-removed, "pixels");
+    el("stat-kept").textContent = fmt(demo.n_corrected, "pixels");
+    el("stat-threshold").textContent = fmt(demo.threshold, "p", { decimals: 4 });
+    el("stat-insufficient").textContent = fmt(demo.n_insufficient, "pixels");
     el("stat-morans").textContent =
       demo.morans_i === null || !Number.isFinite(Number(demo.morans_i))
         ? "n/a"
-        : Number(demo.morans_i).toFixed(2);
-    el("stat-valid").textContent = `${Math.round(demo.valid_fraction * 100)}%`;
+        : fmt(Number(demo.morans_i), "I", { decimals: 2 });
+    el("stat-valid").textContent = fmt(demo.valid_fraction * 100, "%", {
+      decimals: 0,
+    });
 
-    const unit = demo.units ? ` ${demo.units}/mo` : " per month";
-    el("slope-min").textContent = slopeImg.min.toExponential(1);
-    el("slope-max").textContent = slopeImg.max.toExponential(1) + unit;
+    // The legend shows the slope the climate way: per decade, not per month.
+    const perDecade = (v) =>
+      fmt(v * MONTHS_PER_DECADE, units ? `${units} per decade` : "per decade", {
+        decimals: 3,
+      });
+    el("slope-min").textContent = perDecade(slopeImg.min);
+    el("slope-max").textContent = perDecade(slopeImg.max);
 
     const source = el("data-source");
     if (source) {
