@@ -64,7 +64,7 @@ downstream ever sees a mixed-unit field:
 | variable | PSL file units | conversion | catalog units |
 | --- | --- | --- | --- |
 | `surface_temperature` | °C | identity | °C |
-| `snow_water_equivalent` | kg/m² | identity | mm |
+| `snow_water_equivalent` | kg/m² | identity | kg/m2 |
 | `precipitation` | kg/m²/s | × 86,400 | mm/day |
 | `soil_moisture_rootzone` | fraction | × 1000 × 1.9 m | kg/m² |
 | `evapotranspiration` | W/m² | ÷ 2.5×10⁶ × 86,400 | mm/day |

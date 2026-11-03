@@ -25,6 +25,16 @@ def test_a_region_with_one_usable_variable_is_not_silently_matched():
     assert rv.usable.tolist() == [1, 2]
 
 
+def test_a_variable_at_exactly_half_coverage_is_dropped():
+    # Half a region is not a trend. The rule keeps a variable only when more
+    # than half the region has a finite slope, so this boundary stays strict.
+    labels = np.array([[1, 1], [1, 1]])
+    slopes = {"a": np.array([[1.0, np.nan], [3.0, np.nan]])}  # 2 of 4 = half
+    rv = fp.region_vectors(slopes, labels)
+    assert np.isnan(rv.matrix[0, 0])
+    assert rv.usable.tolist() == [0]
+
+
 def test_standardize_drops_a_zero_variance_variable():
     matrix = np.array([[1.0, 5.0], [2.0, 5.0], [3.0, 5.0]])  # col 1 constant
     z, kept = fp.standardize(matrix, ["a", "b"])

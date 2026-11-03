@@ -375,7 +375,7 @@ The cached file keeps PSL's raw numbers, so re-extracting never double-converts.
 | catalog variable | PSL variable | file units | conversion | catalog units | check |
 | --- | --- | --- | --- | --- | --- |
 | `surface_temperature` | `air` | °C | identity | °C | — |
-| `snow_water_equivalent` | `weasd` | kg/m² | identity | mm | 1 kg/m² of water = 1 mm |
+| `snow_water_equivalent` | `weasd` | kg/m2 | identity | kg/m2 | 1 kg/m2 of water = 1 mm; catalog keeps kg/m2 |
 | `precipitation` | `prate` | kg/m²/s | × 86,400 | mm/day | July ITCZ 6.8e-5 → 5.9 mm/day |
 | `soil_moisture_rootzone` | `soilw` | fraction | × 1000 × 1.9 m | kg/m² | Amazon 0.26 → 494 kg/m² |
 | `evapotranspiration` | `lhtfl` | W/m² | ÷ 2.5e6 × 86,400 | mm/day | July tropics +133.6 → 4.6 mm/day, sign kept |
@@ -453,8 +453,9 @@ corrected mask (8-connectivity, the same patches the coherence gate already
 found); each region gets a vector whose entries are that variable's mean
 Theil–Sen slope over the patch, in catalog units.
 
-- **A variable contributes only above half coverage.** If fewer than half a
-  region's pixels have a finite slope for a variable, that entry is NaN. One
+- **A variable contributes only above half coverage.** If at most half a
+  region's pixels have a finite slope for a variable, that entry is NaN (the
+  rule keeps a variable only when more than half the region is covered). One
   surviving pixel is not a trend; it is a hole in the record.
 - **Regions with fewer than two usable variables are never matched.** The
   matching distance requires a full vector, so a region missing half its
