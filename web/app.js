@@ -217,11 +217,14 @@
     clearDots("corrected");
 
     const units = demo.units || "";
+    const removed = demo.n_naive - demo.n_corrected;
 
-    el("tally-naive").textContent = `${fmt(demo.n_naive, "pixels")} flagged`;
+    // The naive panel draws one dot per contested pixel, so its tally has to
+    // read as "these of those", not as the raw flag count.
+    el("tally-naive").textContent =
+      `${fmt(removed, "pixels")} of ${fmt(demo.n_naive, "pixels")} marked`;
     el("tally-corrected").textContent = `${fmt(demo.n_corrected, "pixels")} flagged`;
 
-    const removed = demo.n_naive - demo.n_corrected;
     el("verdict-line").textContent =
       removed >= 0
         ? `Cried wolf ${fmt(removed, removed === 1 ? "time" : "times")}.`
@@ -383,9 +386,7 @@
     document.querySelectorAll(".seg").forEach((b) => b.setAttribute("aria-checked", "false"));
     if (button) button.setAttribute("aria-checked", "true");
     const v = state.catalogByKey[key];
-    el("variable-note").textContent = v
-      ? `${v.label} — ${v.description} · Source: ${v.source}`
-      : "";
+    el("variable-note").textContent = v ? `${v.label} — ${v.description}` : "";
     loadDemo(key);
   }
 

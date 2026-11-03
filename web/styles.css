@@ -208,6 +208,23 @@ main { padding: 0 var(--gutter); }
   background: var(--paper-2);
 }
 
+.map-key {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0.5rem 1rem 0;
+  font-size: 0.8rem;
+  color: var(--ink-2);
+}
+.map-key__dot {
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--naive);
+}
+
 .panel__tally {
   margin: 0;
   padding: 0.7rem 1rem;

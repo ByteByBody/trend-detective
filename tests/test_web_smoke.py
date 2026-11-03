@@ -154,11 +154,11 @@ def test_app_js_clamps_overlay_bounds_to_the_world():
 
 
 def test_app_js_shows_which_source_produced_the_data():
-    # `/catalog` reports the active source's provenance; hiding it in the UI
-    # would leave the NOAA data presented as generic "satellite data".
+    # `/catalog` reports the active source's provenance; the footer is the one
+    # place that names it (the variable note stopped repeating it).
     js = client.get("/static/app.js").text
-    assert "v.source" in js
-    assert "Source:" in js
+    assert "demo.source" in js
+    assert "data-source" in js
 
 
 def test_app_js_reports_undefined_morans_i_as_not_available():
@@ -228,3 +228,19 @@ def test_legend_labels_both_ends_with_the_unit_and_a_zero_mark():
     assert "slope-min" in html and "slope-max" in html and "slope-zero" in html
     js = client.get("/static/app.js").text
     assert "MONTHS_PER_DECADE" in js or "formatNumber" in js
+
+
+def test_tally_states_removed_of_flagged_not_the_raw_flag_count():
+    js = client.get("/static/app.js").text
+    assert "of" in js and "marked" in js
+
+
+def test_the_red_dots_have_a_visible_key():
+    html = client.get("/").text
+    assert 'class="map-key"' in html
+    assert "contested" in html.lower() or "dropped" in html.lower()
+
+
+def test_the_variable_note_no_longer_repeats_the_source():
+    js = client.get("/static/app.js").text
+    assert "Source:" not in js  # the footer is the one place that names it
