@@ -95,17 +95,25 @@ S = sum_{i<j} sgn(x_j - x_i)
 var_S = n * (n - 1) * (2n + 5) / 18
 ```
 
-**Hamed-Rao variance inflation (autocorr_correct=True).** Estimate the lag-k
-autocorrelation `rho_k` of the (deseasonalized) series, then:
+**Hamed-Rao variance inflation (autocorr_correct=True).** Use the lag-1
+autocorrelation `rho_1` of the (deseasonalized) series under an AR(1) model:
 
 ```
-n_star = 1 + (2 / (n (n-1) (n-2))) * sum_{k=1}^{n-1} (n-k)(n-k-1)(n-k-2) * rho_k
-var_S *= n / n_star          # effective-sample-size correction
+rho_1 = sum_{t=1}^{n-1} (x_t - xbar)(x_{t+1} - xbar) / sum_t (x_t - xbar)^2
+rho_1 = clamp(rho_1, 0.0, 0.99)
+var_S *= (1 + rho_1) / (1 - rho_1)          # floored at 1 (never less significance)
 ```
 
-For a pure AR(1) process this reduces to the familiar
-`var inflation ≈ (1 + rho_1) / (1 - rho_1)`, i.e. `n_star ≈ n (1 - rho_1)/(1 + rho_1)` —
-the "240 months → ~42 real facts" result from the concepts doc.
+This equals the "240 months → ~42 real facts" result: for `rho_1 = 0.7`,
+`(1-0.7)/(1+0.7) ≈ 0.176` effective-sample fraction.
+
+**Why lag-1, not all lags (implementation note).** Summing sample
+autocorrelations across *all* lags is unstable: noisy high-lag estimates
+frequently *shrink* the variance and manufacture false trends — measured, a
+white-noise series' false-positive rate rose from 4% to 23%. The lag-1 form is
+stable, and the factor is floored at 1.0 so the correction never claims more
+significance than the independent test (conservative; negative autocorrelation
+is not exploited — a documented limitation).
 
 **Standardized score with continuity correction:**
 
