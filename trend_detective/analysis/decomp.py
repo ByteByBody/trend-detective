@@ -5,6 +5,8 @@ See docs/algorithms.md section 2.
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import xarray as xr
 
@@ -15,7 +17,12 @@ def _deseasonalize_climatology(values: np.ndarray) -> np.ndarray:
     month_of = np.arange(n_months) % 12
     clim = np.empty((12,) + values.shape[1:], dtype=float)
     for m in range(12):
-        clim[m] = np.nanmean(values[month_of == m], axis=0)
+        # A calendar month can be all-NaN at a pixel (heavy gaps); nanmean then
+        # warns "Mean of empty slice". The result is NaN and that is correct —
+        # silence the warning, do not impute.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            clim[m] = np.nanmean(values[month_of == m], axis=0)
     out = values - clim[month_of]
     return np.where(np.isnan(values), np.nan, out)
 

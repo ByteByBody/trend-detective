@@ -21,3 +21,15 @@ def test_shape_and_nans_preserved():
     out = decomp.deseasonalize(da, method="climatology")
     assert out.shape == da.shape
     assert np.array_equal(np.isnan(out.values), np.isnan(da.values))
+
+
+def test_all_nan_calendar_month_at_a_pixel_does_not_raise():
+    # Wipe every January (t mod 12 == 0) at one pixel: that calendar month has
+    # no data there, so its climatology is NaN. Must not raise or impute.
+    da, _ = sample.generate_land_grid(seed=8, ny=3, nx=3, n_months=60)
+    values = da.values.copy()
+    values[0::12, 1, 1] = np.nan
+    da = da.copy(data=values)
+    out = decomp.deseasonalize(da, method="climatology")
+    assert np.isnan(out.values[0::12, 1, 1]).all()
+    assert np.isfinite(out.values[1::12, 1, 1]).all()

@@ -24,14 +24,34 @@ def _sen_slope_1d(x: np.ndarray) -> float:
         return float(np.nanmedian(slopes))
 
 
+def _detrended(x: np.ndarray) -> np.ndarray:
+    """Remove a least-squares linear trend, returning the residuals."""
+    n = x.size
+    t = np.arange(n, dtype=float)
+    t -= t.mean()
+    denom = float(np.dot(t, t))
+    if denom <= 0:
+        return x - x.mean()
+    slope = float(np.dot(t, x - x.mean()) / denom)
+    return x - x.mean() - slope * t
+
+
 def _effective_sample_size_factor(x: np.ndarray) -> float:
     """Hamed-Rao / AR(1) variance inflation ``(1 + rho) / (1 - rho)``.
 
-    Returns the multiplier for ``Var(S)``. Uses the lag-1 autocorrelation
-    (an AR(1) model), which is stable for short and noisy series — summing
-    estimates across *all* lags is unstable, because noisy high-lag
-    autocorrelations frequently *shrink* the variance and manufacture false
-    trends (measured: white-noise false positives rose from 4% to 23%).
+    Returns the multiplier for ``Var(S)``. The lag-1 autocorrelation is
+    estimated on the **detrended residual** series, *not* the raw series:
+    a real linear trend is itself highly autocorrelated (measured raw
+    ``rho_1 = 0.987`` for a genuine 0.5/month trend), so estimating ``rho``
+    on the raw data penalises the very trend we are trying to detect —
+    inflating the variance ~150x and hiding it. The residual autocorrelation
+    (measured ``0.538`` for AR(1) noise with ``phi = 0.5``) is what the
+    correction is meant to account for.
+
+    Uses lag-1 only (an AR(1) model), which is stable for short and noisy
+    series — summing estimates across *all* lags is unstable, because noisy
+    high-lag autocorrelations frequently *shrink* the variance and manufacture
+    false trends (measured: white-noise false positives rose from 4% to 23%).
 
     The factor is floored at 1.0: the correction never claims *more*
     significance than the independent test, matching the "won't cry wolf"
@@ -41,7 +61,7 @@ def _effective_sample_size_factor(x: np.ndarray) -> float:
     n = x.size
     if n < 3:
         return 1.0
-    xd = x - x.mean()
+    xd = _detrended(x)
     denom = float(np.dot(xd, xd))
     if denom <= 0:
         return 1.0

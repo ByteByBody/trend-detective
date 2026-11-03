@@ -95,17 +95,26 @@ S = sum_{i<j} sgn(x_j - x_i)
 var_S = n * (n - 1) * (2n + 5) / 18
 ```
 
-**Hamed-Rao variance inflation (autocorr_correct=True).** Use the lag-1
-autocorrelation `rho_1` of the (deseasonalized) series under an AR(1) model:
+**Hamed-Rao variance inflation (autocorr_correct=True).** Estimate the lag-1
+autocorrelation `rho_1` of the **linear-detrended residual** series (under an
+AR(1) model):
 
 ```
-rho_1 = sum_{t=1}^{n-1} (x_t - xbar)(x_{t+1} - xbar) / sum_t (x_t - xbar)^2
+r_t = x_t - (a + b t)                         # least-squares line removed
+rho_1 = sum_{t=1}^{n-1} (r_t - rbar)(r_{t+1} - rbar) / sum_t (r_t - rbar)^2
 rho_1 = clamp(rho_1, 0.0, 0.99)
 var_S *= (1 + rho_1) / (1 - rho_1)          # floored at 1 (never less significance)
 ```
 
 This equals the "240 months → ~42 real facts" result: for `rho_1 = 0.7`,
 `(1-0.7)/(1+0.7) ≈ 0.176` effective-sample fraction.
+
+**Why detrend first (implementation note).** A genuine linear trend is itself
+highly autocorrelated — measured raw `rho_1 = 0.987` for an injected 0.5/month
+trend — so estimating `rho` on the raw series penalises the very trend we are
+trying to detect (inflation ~151x, hiding it). The residual autocorrelation
+(measured `0.538` for AR(1) noise with `phi = 0.5`) is what the correction is
+meant to model.
 
 **Why lag-1, not all lags (implementation note).** Summing sample
 autocorrelations across *all* lags is unstable: noisy high-lag estimates
