@@ -3,6 +3,16 @@ import numpy as np
 from trend_detective.analysis import coherence
 
 
+def test_invalid_connectivity_raises():
+    m = np.zeros((3, 3), bool)
+    m[1, 1] = True
+    try:
+        coherence.connected_patch_filter(m, connectivity=6)
+    except ValueError:
+        return
+    raise AssertionError("expected ValueError for connectivity=6")
+
+
 def test_scattered_pixels_removed_block_kept():
     m = np.zeros((10, 10), bool)
     m[2, 2] = True

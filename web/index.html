@@ -45,8 +45,8 @@
           <h3 class="panel__title">Naive</h3>
           <p class="panel__sub">Every pixel the raw test calls significant.</p>
         </header>
-        <div class="map" id="map-naive" role="img"
-             aria-label="Map of pixels flagged by the raw per-pixel test"></div>
+        <div class="map" id="map-naive" role="region" tabindex="0"
+             aria-label="Map of pixels flagged by the raw per-pixel test. Press Enter to read the cell at the map center."></div>
         <p class="panel__tally" id="tally-naive">—</p>
       </article>
 
@@ -60,8 +60,8 @@
           <h3 class="panel__title">Corrected</h3>
           <p class="panel__sub">False-discovery control, then connected patches only.</p>
         </header>
-        <div class="map" id="map-corrected" role="img"
-             aria-label="Map of pixels surviving the corrected test"></div>
+        <div class="map" id="map-corrected" role="region" tabindex="0"
+             aria-label="Map of pixels surviving the corrected test. Press Enter to read the cell at the map center."></div>
         <p class="panel__tally" id="tally-corrected">—</p>
       </article>
     </section>
@@ -75,7 +75,9 @@
           <div class="stat"><dt>False alarms removed</dt><dd id="stat-removed">—</dd></div>
           <div class="stat"><dt>Real pixels kept</dt><dd id="stat-kept">—</dd></div>
           <div class="stat"><dt>p-value cutoff</dt><dd id="stat-threshold">—</dd></div>
-          <div class="stat"><dt>Data present</dt><dd id="stat-valid">—</dd></div>
+          <div class="stat"><dt>Insufficient record</dt><dd id="stat-insufficient">—</dd></div>
+          <div class="stat"><dt>Spatial clustering</dt><dd id="stat-morans">—</dd></div>
+          <div class="stat"><dt>Grid coverage</dt><dd id="stat-valid">—</dd></div>
         </dl>
         <div class="legend" aria-hidden="true">
           <span class="legend__caption">Trend slope</span>

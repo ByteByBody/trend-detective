@@ -23,10 +23,13 @@ class CryWolfResult:
     p_value: xr.DataArray
     naive_mask: xr.DataArray
     corrected_mask: xr.DataArray
+    insufficient_mask: xr.DataArray
     threshold: float
     n_naive: int
     n_corrected: int
+    n_insufficient: int
     valid_fraction: float
+    morans_i: float
 
 
 def _grid(values: np.ndarray, like: xr.DataArray, name: str) -> xr.DataArray:
@@ -51,9 +54,10 @@ def cry_wolf(
 
     values = np.asarray(series.values, dtype=float)
     valid_frac_per_pixel = np.isfinite(values).mean(axis=0)
+    insufficient = valid_frac_per_pixel < min_valid
 
     p_values = np.asarray(p.values, dtype=float).copy()
-    p_values = np.where(valid_frac_per_pixel < min_valid, np.nan, p_values)
+    p_values = np.where(insufficient, np.nan, p_values)
     variance = np.nanvar(values, axis=0)
     p_values = np.where(variance <= 0.0, np.nan, p_values)  # constant-series guard
 
@@ -62,14 +66,19 @@ def cry_wolf(
     corrected = coherence.connected_patch_filter(
         bh_mask, min_size=min_patch, connectivity=8
     )
+    slope_values = np.asarray(slope.values, dtype=float)
+    morans = coherence.morans_i(slope_values, corrected)
 
     return CryWolfResult(
         slope=slope,
         p_value=_grid(p_values, da, "p_value"),
         naive_mask=_grid(naive, da, "naive_mask"),
         corrected_mask=_grid(corrected, da, "corrected_mask"),
+        insufficient_mask=_grid(insufficient, da, "insufficient_mask"),
         threshold=float(threshold),
         n_naive=int(naive.sum()),
         n_corrected=int(corrected.sum()),
+        n_insufficient=int(insufficient.sum()),
         valid_fraction=float(np.isfinite(values).mean()),
+        morans_i=float(morans),
     )

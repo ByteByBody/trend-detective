@@ -27,16 +27,31 @@ def _deseasonalize_climatology(values: np.ndarray) -> np.ndarray:
     return np.where(np.isnan(values), np.nan, out)
 
 
+#: STL needs at least two full seasonal periods to estimate a cycle.
+_STL_MIN_MONTHS = 24
+
+
 def _deseasonalize_stl(values: np.ndarray) -> np.ndarray:
-    """Remove the STL seasonal component per pixel (requires statsmodels)."""
+    """Remove the STL seasonal component per pixel (requires statsmodels).
+
+    Pixels STL cannot handle — any missing month, or a series shorter than two
+    periods — fall back to the climatology method for that pixel. They are
+    *not* left with their seasonal cycle intact: a gappy pixel can still pass
+    the pipeline's valid-fraction gate, and testing it with a 12-month swing
+    still in place would manufacture a trend.
+    """
     from statsmodels.tsa.seasonal import STL  # local import: optional dependency
 
     n_months = values.shape[0]
+    fallback = _deseasonalize_climatology(values)
     out = values.copy()
     for i in range(values.shape[1]):
         for j in range(values.shape[2]):
             series = values[:, i, j]
-            if np.isnan(series).any() or np.all(series == series[0]):
+            if n_months < _STL_MIN_MONTHS or np.isnan(series).any():
+                out[:, i, j] = fallback[:, i, j]
+                continue
+            if np.all(series == series[0]):  # constant: nothing to remove
                 continue
             seasonal = STL(series, period=12, robust=True).fit().seasonal
             out[:, i, j] = series - seasonal

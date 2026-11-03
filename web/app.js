@@ -5,7 +5,7 @@
 (() => {
   "use strict";
 
-  const WORLD_BOUNDS = [[-88, -180], [88, 180]];
+  const DEFAULT_BOUNDS = [[-90, -180], [90, 180]];
   const TILE_URL = "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png";
   const TILE_ATTR =
     '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> ' +
@@ -23,6 +23,7 @@
   const state = {
     variable: null,
     demo: null,
+    bounds: DEFAULT_BOUNDS,
     maps: { naive: null, corrected: null },
     overlays: { naive: null, corrected: null, marker: null },
     colors: { naive: "#d6453d", corrected: "#0f7a6b" },
@@ -130,7 +131,7 @@
       zoomControl: true,
     });
     L.tileLayer(TILE_URL, { attribution: TILE_ATTR, noWrap: true }).addTo(map);
-    map.setMaxBounds(WORLD_BOUNDS);
+    map.setMaxBounds(DEFAULT_BOUNDS);
     return map;
   }
 
@@ -138,7 +139,7 @@
     const map = state.maps[key];
     if (!map) return;
     if (state.overlays[key]) map.removeLayer(state.overlays[key]);
-    state.overlays[key] = L.imageOverlay(dataUrl, WORLD_BOUNDS, {
+    state.overlays[key] = L.imageOverlay(dataUrl, state.bounds, {
       opacity: opacity,
       interactive: false,
     }).addTo(map);
@@ -149,12 +150,26 @@
     ["naive", "corrected"].forEach((key) => {
       const map = state.maps[key];
       if (state.overlays[key + "Slope"]) map.removeLayer(state.overlays[key + "Slope"]);
-      state.overlays[key + "Slope"] = L.imageOverlay(shapeUrl, WORLD_BOUNDS, {
+      state.overlays[key + "Slope"] = L.imageOverlay(shapeUrl, state.bounds, {
         opacity: 0.55,
         interactive: false,
       }).addTo(map);
       if (state.overlays[key]) state.overlays[key].bringToFront();
     });
+  }
+
+  function gridBounds(demo) {
+    // Cell-edge extent: half a cell beyond the outermost cell centres, so the
+    // raster lines up with the basemap instead of being scaled to the poles.
+    const lat = demo.lat;
+    const lon = demo.lon;
+    const dLat = lat.length > 1 ? Math.abs(lat[0] - lat[1]) / 2 : 0;
+    const dLon = lon.length > 1 ? Math.abs(lon[1] - lon[0]) / 2 : 0;
+    const minLat = Math.max(-90, Math.min(...lat) - dLat);
+    const maxLat = Math.min(90, Math.max(...lat) + dLat);
+    const minLon = Math.min(...lon) - dLon;
+    const maxLon = Math.max(...lon) + dLon;
+    return [[minLat, minLon], [maxLat, maxLon]];
   }
 
   // --- rendering ------------------------------------------------------------
@@ -165,6 +180,8 @@
 
   function renderDemo(demo) {
     state.demo = demo;
+    state.bounds = gridBounds(demo);
+    Object.values(state.maps).forEach((map) => map.setMaxBounds(state.bounds));
 
     const slopeImg = slopeToDataURL(demo.slope);
     drawSlopeOverlays(slopeImg.url);
@@ -187,6 +204,8 @@
     el("stat-removed").textContent = `${removed >= 0 ? "-" : "+"}${fmtInt(Math.abs(removed))}`;
     el("stat-kept").textContent = fmtInt(demo.n_corrected);
     el("stat-threshold").textContent = demo.threshold.toFixed(4);
+    el("stat-insufficient").textContent = fmtInt(demo.n_insufficient);
+    el("stat-morans").textContent = Number(demo.morans_i).toFixed(2);
     el("stat-valid").textContent = `${Math.round(demo.valid_fraction * 100)}%`;
 
     const unit = demo.units ? ` ${demo.units}/mo` : " per month";
@@ -330,8 +349,20 @@
   function init() {
     state.maps.naive = makeMap("map-naive");
     state.maps.corrected = makeMap("map-corrected");
-    Object.values(state.maps).forEach((map) => {
+    ["naive", "corrected"].forEach((key) => {
+      const map = state.maps[key];
       map.on("click", (e) => loadSeries(e.latlng.lat, e.latlng.lng));
+      // Keyboard path for the same action: read the cell at the map centre.
+      const node = el("map-" + key);
+      if (node) {
+        node.addEventListener("keydown", (e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            const c = map.getCenter();
+            loadSeries(c.lat, c.lng);
+          }
+        });
+      }
     });
     loadCatalog();
   }

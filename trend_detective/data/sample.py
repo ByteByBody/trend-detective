@@ -60,6 +60,10 @@ def generate_land_grid(
     """Build a monthly gridded series with injected trends and known truth.
 
     Returns ``(dataarray, ground_truth)``. Deterministic for a given ``seed``.
+
+    The grid is a **full global rectangle** — every cell carries the model, so
+    despite the name there is no land/sea mask. A reduced real subset with a
+    land mask is what the deferred Earthdata path would supply.
     """
     rng = np.random.default_rng(seed)
 

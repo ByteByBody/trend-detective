@@ -55,8 +55,14 @@ value[t,i,j] = seasonal[t] + slope[i,j] * t + noise[t,i,j]
   then subtract `clim[t mod 12]` from each timestep.
 - **`stl`:** `statsmodels.tsa.seasonal.STL(series, period=12, robust=True)` per pixel;
   subtract the returned `seasonal` component.
-- **`auto`:** `stl` if `statsmodels` imports, else `climatology`.
+- **`auto`:** `stl` if `statsmodels` imports, else `climatology` (the shipped
+  environment has no `statsmodels`, so the default path is `climatology`).
 - **NaN rule:** where the input is NaN, the output is NaN. Never fill.
+- **STL fallback:** a pixel the STL cannot handle — any missing month, or a series
+  shorter than two periods (< 24 months) — is deseasonalized with the **climatology**
+  method for that pixel. It is never left with its seasonal cycle in place: such a
+  pixel can still clear the pipeline's valid-fraction gate, and a 12-month swing would
+  manufacture a trend.
 
 ---
 
@@ -70,11 +76,16 @@ For each pixel with the valid series `x_0..x_{n-1}`:
 slope = median over all pairs i<j of (x_j - x_i) / (j - i)
 ```
 
-**Implementation note (memory):** the number of pairs is `n(n-1)/2` (e.g. 28,680 for
-`n=240`). Process pixels in **chunks** (e.g. 500 pixels) building a
-`(chunk, npairs)` float array, then `np.nanmedian(axis=1)`. Precompute the pair index
-difference matrix once. NaN pixels: `nanmedian` drops them.
-Guard: `n < 2` → NaN.
+**Implementation note (measured).** The number of pairs is `n(n-1)/2` (28,680 for
+`n=240`). The pair index vectors `i, j` and `j-i` are built **once per grid** and
+reused for every pixel; the no-missing fast path takes `np.median` of a contiguous
+1-D pair vector, and pixels with gaps take the NaN-aware per-pixel median.
+
+This per-pixel form is *faster* than a vectorised `(pixels x pairs)` block, which was
+implemented and measured first: at most one pair vector exists at a time, so the
+memory pressure that motivates chunking never arises, and the small contiguous vector
+is cache-friendly. Measured cold on a 45x90 grid: **3.7 s** per-pixel vs 12.7 s
+vectorised. Guard: `n < 2` → NaN.
 
 ---
 
@@ -135,8 +146,9 @@ Z = 0                        if S = 0
 **Two-sided p-value:** `p = 2 * (1 - Phi(|Z|)) = erfc(|Z| / sqrt(2))`
 where `Phi` is the standard normal CDF (`math.erfc` suffices; no SciPy needed).
 
-**Guards:** `n < 2`, `var_S <= 0`, or zero-variance series → `p = NaN` (never "significant").
-Chunk over pixels; drop NaN months per pixel before computing `n`, `S`, and `rho_k`.
+**Guards:** `n < 3`, `var_S <= 0`, or zero-variance series → `p = NaN` (never "significant").
+Drop NaN months per pixel before computing `n`, `S`, and `rho`. Same implementation
+note as section 3: indices built once, per-pixel loop measured fastest.
 
 ---
 
@@ -199,28 +211,41 @@ slope, p = trend_test(series)
 
 # per-pixel valid fraction over the period
 valid_fraction = valid_months / total_months
-p = NaN where valid_fraction < min_valid          # "insufficient record"
-p = NaN where pixel variance ~ 0                  # constant series guard
+insufficient = valid_fraction < min_valid
+p = NaN where insufficient                          # "insufficient record"
+p = NaN where pixel variance == 0                   # constant series guard
 
 nmask = naive_mask(p, alpha=0.05)
-cmask = connected_patch_filter(benjamini_hochberg(p, q)[0], min_size=min_patch)
-threshold = benjamini_hochberg(p, q)[1]
-n_naive, n_corrected = int(nmask.sum()), int(cmask.sum())
+cmask, threshold = benjamini_hochberg(p, q)
+cmask = connected_patch_filter(cmask, min_size=min_patch, q=..., connectivity=8)
+morans_i = morans_i(slope, cmask)                   # spatial-clustering diagnostic
 ```
 
-**`CryWolfResult` fields:** `slope, p_value, naive_mask, corrected_mask, threshold,
-n_naive, n_corrected, valid_fraction`.
+**`CryWolfResult` fields:** `slope, p_value, naive_mask, corrected_mask,
+insufficient_mask, threshold, n_naive, n_corrected, n_insufficient, valid_fraction,
+morans_i`.
+
+`insufficient_mask` marks the pixels the valid-fraction gate excluded, so "not enough
+data" is distinguishable from "tested, not significant"; the evidence card reports the
+count.
 
 ---
 
 ## 8. API mapping — `api/app.py`
 
-- `GET /catalog` → list of `{key,label,units,source}` from `catalog.VARIABLES`.
+- `GET /catalog` → list of `{key,label,units,source,description}` from `catalog.VARIABLES`.
 - `GET /demo/{variable}` → `CryWolfResult` as JSON: `lat`, `lon`, `naive_mask` (0/1),
   `corrected_mask` (0/1), `slope`, plus `threshold`, `n_naive`, `n_corrected`,
-  `valid_fraction`. Unknown variable → `HTTPException(404)`.
-- `GET /timeseries/{variable}?lat=&lon=` → nearest-cell `{time, value}`.
-- `GET /` → `web/index.html`.
+  `n_insufficient`, `morans_i`, `valid_fraction`. Unknown variable → `HTTPException(404)`.
+  NaN slopes become `null` (JSON has no NaN).
+- `GET /timeseries/{variable}?lat=&lon=` → nearest-cell `{time, value}`; non-finite
+  coordinates → 422.
+- `GET /` → `web/index.html`; static assets under `/static`.
+
+**Pluggable data layer:** the API reads through `data.base.DatasetSource`
+(`load(variable) -> DataArray`). The shipped source is `SyntheticSource`; the deferred
+live fetcher is `data.fetch.EarthdataSource` (raises `NotImplementedError`). Swapping
+sources is a one-line change in `api/app.py` and touches no analysis code.
 
 ---
 
@@ -228,11 +253,12 @@ n_naive, n_corrected, valid_fraction`.
 
 - **Ties:** if ties exist, MK's no-tie variance is slightly off; acceptable for this slice,
   noted as a limitation. BH ordering must be **stable** so equal p-values give a stable threshold.
-- **Performance:** chunk the pixel loop for Sen's slope (pair matrix) and for MK
-  (autocorrelation). Target grid 45×90 = 4,050 pixels, monthly 240 → seconds, cached.
-- **Autocorrelation estimate:** compute `rho_k` from the deseasonalized series; cap the lag
-  sum at `k < n-2` (Hamed-Rao needs `n-k-2 >= 1`).
-- **Significance vs magnitude:** p answers "real vs luck", not size. The evidence card must
-  report the slope alongside p so users don't over-read significance.
+- **Performance:** pair-index vectors are built once per grid and reused; the per-pixel
+  loop is faster than a vectorised block here (measured: 45×90 → 3.7 s cold). Results are
+  cached per variable in the API.
+- **Autocorrelation estimate:** the lag-1 `rho` is estimated on the linear-detrended
+  residual, floored at 1.0, clamped to `[0, 0.99]`.
+- **Significance vs magnitude:** p answers "real vs luck", not size. The evidence card reports
+  the slope alongside p so users don't over-read significance.
 - **Never invent data:** gaps excluded and flagged; a pixel below `min_valid` is reported as
   "insufficient record", never imputed.

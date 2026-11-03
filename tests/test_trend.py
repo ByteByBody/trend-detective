@@ -47,3 +47,30 @@ def test_autocorrelated_series_not_over_detected():
 def test_constant_series_is_nan_not_significant():
     _, p = trend.trend_test(_series(np.full(50, 7.0)))
     assert np.isnan(float(p.values[0, 0]))
+
+
+def test_grid_paths_match_per_pixel_reference():
+    rng = np.random.default_rng(2)
+    x = rng.normal(size=(60, 7, 5))
+    x[rng.random(x.shape) < 0.1] = np.nan  # mix in missing months
+    flat = x.reshape(60, -1)
+
+    ref_slope = np.array([trend._sen_slope_1d(flat[:, p]) for p in range(flat.shape[1])])
+    ref_p = np.array(
+        [trend._mk_pvalue_1d(flat[:, p], True) for p in range(flat.shape[1])]
+    )
+    assert np.allclose(trend._sen_slopes(flat), ref_slope, equal_nan=True)
+    assert np.allclose(trend._mk_pvalues(flat, True), ref_p, equal_nan=True)
+
+
+def test_nan_free_fast_path_matches_nan_aware_path():
+    # The fast path skips the finite check and uses np.median; it must agree
+    # with the general per-pixel routines on data that has no gaps.
+    rng = np.random.default_rng(3)
+    flat = rng.normal(size=(48, 40))
+    ref_slope = np.array([trend._sen_slope_1d(flat[:, p]) for p in range(flat.shape[1])])
+    ref_p = np.array(
+        [trend._mk_pvalue_1d(flat[:, p], True) for p in range(flat.shape[1])]
+    )
+    assert np.allclose(trend._sen_slopes(flat), ref_slope)
+    assert np.allclose(trend._mk_pvalues(flat, True), ref_p)

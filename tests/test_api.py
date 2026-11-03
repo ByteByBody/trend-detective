@@ -15,7 +15,15 @@ def test_demo_endpoint_shape():
     assert r.status_code == 200
     body = r.json()
     assert set(
-        ["threshold", "n_naive", "n_corrected", "naive_mask", "corrected_mask"]
+        [
+            "threshold",
+            "n_naive",
+            "n_corrected",
+            "n_insufficient",
+            "morans_i",
+            "naive_mask",
+            "corrected_mask",
+        ]
     ).issubset(body)
     assert len(body["naive_mask"]) == len(body["lat"])
     assert len(body["naive_mask"][0]) == len(body["lon"])
@@ -23,6 +31,10 @@ def test_demo_endpoint_shape():
 
 def test_demo_unknown_variable_404():
     assert client.get("/demo/nope").status_code == 404
+
+
+def test_timeseries_rejects_non_finite_coordinates():
+    assert client.get("/timeseries/soil_moisture_rootzone?lat=nan&lon=0").status_code == 422
 
 
 def test_timeseries_endpoint():

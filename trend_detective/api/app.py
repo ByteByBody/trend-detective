@@ -6,7 +6,6 @@ synthetic grid, and a per-cell time series. See docs/algorithms.md section 8.
 
 from __future__ import annotations
 
-import zlib
 from functools import lru_cache
 from pathlib import Path
 
@@ -17,29 +16,21 @@ from fastapi.staticfiles import StaticFiles
 
 from trend_detective import catalog, config
 from trend_detective.analysis import pipeline
-from trend_detective.data import sample
+from trend_detective.data import base as data_source
 
 _WEB_DIR = Path(__file__).resolve().parents[2] / "web"
 
-#: Small grid keeps the demo responsive.
-DEMO_GRID = (30, 60)
-DEMO_MONTHS = 240
-
 app = FastAPI(title="Trend Detective", version="0.1.0")
+
+#: The data source the demo reads from. Swapping this for the Earthdata
+#: fetcher is the only change needed to run on live data.
+_SOURCE = data_source.get_source(config.DATA_SOURCE)
 
 
 @lru_cache(maxsize=None)
 def _demo_grid(variable: str):
-    """Generate and cache one deterministic synthetic grid per variable."""
-    seed = zlib.crc32(variable.encode()) % 100_000
-    da, _ = sample.generate_land_grid(
-        seed=seed,
-        ny=DEMO_GRID[0],
-        nx=DEMO_GRID[1],
-        n_months=DEMO_MONTHS,
-        autocorr=0.5,
-    )
-    return da
+    """Load and cache one deterministic grid per variable."""
+    return _SOURCE.load(variable)
 
 
 @lru_cache(maxsize=None)
@@ -64,6 +55,8 @@ def _demo_body(variable: str) -> dict:
         "threshold": float(res.threshold),
         "n_naive": int(res.n_naive),
         "n_corrected": int(res.n_corrected),
+        "n_insufficient": int(res.n_insufficient),
+        "morans_i": float(res.morans_i),
         "valid_fraction": float(res.valid_fraction),
         "naive_mask": _mask(res.naive_mask.values),
         "corrected_mask": _mask(res.corrected_mask.values),
@@ -107,6 +100,9 @@ def get_timeseries(
         catalog.get_variable(variable)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"unknown variable: {variable!r}")
+
+    if not (np.isfinite(lat) and np.isfinite(lon)):
+        raise HTTPException(status_code=422, detail="lat and lon must be finite")
 
     da = _demo_grid(variable)
     i = int(np.abs(da["lat"].values - lat).argmin())

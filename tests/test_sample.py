@@ -32,3 +32,19 @@ def test_true_patch_slopes_recovered():
 def test_gaps_are_nan_when_requested():
     da, _ = sample.generate_land_grid(seed=2, ny=5, nx=5, n_months=60, gap_fraction=0.3)
     assert np.isnan(da.values).mean() > 0.0
+
+
+def test_bundled_round_trip(tmp_path):
+    da, _ = sample.generate_land_grid(seed=13, ny=5, nx=6, n_months=36)
+    path = str(tmp_path / "sample.nc")
+    sample.save_bundled(da, path)
+    loaded = sample.load_bundled(path)
+    assert loaded.dims == da.dims
+    assert np.allclose(loaded.values, da.values, equal_nan=True)
+
+
+def test_load_bundled_missing_raises(tmp_path):
+    import pytest
+
+    with pytest.raises(FileNotFoundError):
+        sample.load_bundled(str(tmp_path / "absent.nc"))

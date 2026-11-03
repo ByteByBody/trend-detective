@@ -14,13 +14,22 @@ def test_bh_threshold_matches_definition():
     assert mask.sum() == (p <= thr).sum()
 
 
-def test_false_discovery_rate_controlled_under_null():
-    rng = np.random.default_rng(0)
-    m, reps, flagged = 2000, 50, 0
-    for _ in range(reps):
-        _, thr = significance.benjamini_hochberg(rng.uniform(size=m), q=0.05)
-        flagged += int((rng.uniform(size=m) <= thr).sum())
-    assert flagged / (reps * m) < 0.05
+def test_false_discovery_rate_controlled_under_mixed_signals():
+    # 200 true effects with very small p-values amid 1800 nulls. A working BH
+    # must (a) recover nearly all true effects and (b) keep the share of false
+    # discoveries among everything it flags at or below q. The old test used
+    # only nulls, where the threshold is ~0 and any implementation passes.
+    rng = np.random.default_rng(1)
+    m_signal, m_null = 200, 1800
+    p = np.concatenate(
+        [rng.uniform(0.0, 1e-4, m_signal), rng.uniform(0.0, 1.0, m_null)]
+    )
+    mask, thr = significance.benjamini_hochberg(p, q=0.05)
+
+    assert mask[:m_signal].sum() >= 0.9 * m_signal
+    assert thr > 0
+    false_discoveries = int(mask[m_signal:].sum())
+    assert false_discoveries / max(1, int(mask.sum())) <= 0.05
 
 
 def test_nans_are_never_flagged():
@@ -29,8 +38,18 @@ def test_nans_are_never_flagged():
     assert mask[1] == False  # noqa: E712
 
 
-def test_pvalue_ties_are_stable():
+def test_all_nan_or_empty_input_returns_empty_mask():
+    for p in (np.array([np.nan, np.nan]), np.array([])):
+        mask, thr = significance.benjamini_hochberg(p)
+        assert not mask.any()
+        assert thr == 0.0
+
+
+def test_pvalue_ties_keep_the_largest_qualifying_rank():
+    # Three tied small p-values; BH includes every one of them. The assertion
+    # is on the outcome (which pixels survive), not a repeated-call identity.
     p = np.array([0.01, 0.01, 0.01, 0.9, 0.9])
-    mask1, thr1 = significance.benjamini_hochberg(p, q=0.05)
-    mask2, thr2 = significance.benjamini_hochberg(p, q=0.05)
-    assert thr1 == thr2 and np.array_equal(mask1, mask2)
+    mask, thr = significance.benjamini_hochberg(p, q=0.05)
+    assert thr == 0.01
+    assert mask[:3].all()
+    assert not mask[3:].any()

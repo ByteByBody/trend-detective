@@ -20,3 +20,12 @@ DEFAULT_GRID = (45, 90)
 
 #: Default number of monthly timesteps.
 DEFAULT_MONTHS = 240
+
+#: Smaller grid for the interactive demo (keeps the API responsive).
+DEMO_GRID = (30, 60)
+
+#: AR(1) autocorrelation of the demo grid — enough memory to be a fair test.
+DEMO_AUTOCORR = 0.5
+
+#: Data source used by the API when none is configured.
+DATA_SOURCE = "synthetic"

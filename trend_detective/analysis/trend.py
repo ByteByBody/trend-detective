@@ -85,9 +85,37 @@ def _mk_pvalue_1d(x: np.ndarray, autocorr_correct: bool) -> float:
     var_s = n * (n - 1) * (2 * n + 5) / 18.0
     if autocorr_correct:
         var_s *= _effective_sample_size_factor(x)
+    return _p_from_s(s, var_s)
+
+
+def _sen_slopes(flat: np.ndarray) -> np.ndarray:
+    """Theil-Sen slope for every column of ``flat`` (time, pixels).
+
+    The pair-index vectors are built **once** and reused for every pixel; the
+    no-missing fast path uses ``np.median`` on a contiguous 1-D pair vector.
+    Measured faster than a vectorised (pixels x pairs) block: the per-pixel
+    vector stays small and cache-friendly, and at most one pair vector exists
+    at a time, so the memory motivation for chunking does not apply.
+    """
+    n, n_pixels = flat.shape
+    out = np.full(n_pixels, math.nan)
+    if n < 2:
+        return out
+    i, j = np.triu_indices(n, 1)
+    denom = (j - i).astype(float)
+    for p in range(n_pixels):
+        x = flat[:, p]
+        if np.isfinite(x).all():
+            out[p] = np.median((x[j] - x[i]) / denom)
+        else:
+            out[p] = _sen_slope_1d(x)
+    return out
+
+
+def _p_from_s(s: float, var_s: float) -> float:
+    """Two-sided p-value from the Mann-Kendall statistic and its variance."""
     if var_s <= 0:
         return math.nan
-
     if s > 0:
         z = (s - 1) / math.sqrt(var_s)
     elif s < 0:
@@ -97,16 +125,33 @@ def _mk_pvalue_1d(x: np.ndarray, autocorr_correct: bool) -> float:
     return math.erfc(abs(z) / math.sqrt(2.0))
 
 
-def _apply_over_pixels(da: xr.DataArray, fn) -> xr.DataArray:
-    """Apply a 1-D time-series function to every pixel of a (time, lat, lon) DA."""
-    values = np.asarray(da.values, dtype=float)
-    t, ny, nx = values.shape
-    flat = values.reshape(t, ny * nx)
-    out = np.empty(ny * nx, dtype=float)
-    for p in range(ny * nx):
-        out[p] = fn(flat[:, p])
+def _mk_pvalues(flat: np.ndarray, autocorr_correct: bool = True) -> np.ndarray:
+    """Mann-Kendall p-value for every column of ``flat`` (time, pixels)."""
+    n, n_pixels = flat.shape
+    out = np.full(n_pixels, math.nan)
+    if n < 3:
+        return out
+    i, j = np.triu_indices(n, 1)
+    var_base = n * (n - 1) * (2 * n + 5) / 18.0
+    for p in range(n_pixels):
+        x = flat[:, p]
+        if not np.isfinite(x).all():
+            out[p] = _mk_pvalue_1d(x, autocorr_correct)
+            continue
+        if x.max() == x.min():  # constant: no trend, never significant
+            continue
+        s = float(np.sign(x[j] - x[i]).sum())
+        var_s = var_base
+        if autocorr_correct:
+            var_s *= _effective_sample_size_factor(x)
+        out[p] = _p_from_s(s, var_s)
+    return out
+
+
+def _wrap_grid(values: np.ndarray, da: xr.DataArray) -> xr.DataArray:
+    ny, nx = da.sizes["lat"], da.sizes["lon"]
     return xr.DataArray(
-        out.reshape(ny, nx),
+        values.reshape(ny, nx),
         dims=("lat", "lon"),
         coords={"lat": da["lat"], "lon": da["lon"]},
         name=da.name,
@@ -115,12 +160,16 @@ def _apply_over_pixels(da: xr.DataArray, fn) -> xr.DataArray:
 
 def theilsen_slope(da: xr.DataArray) -> xr.DataArray:
     """Theil-Sen slope per pixel (units per month)."""
-    return _apply_over_pixels(da, _sen_slope_1d)
+    values = np.asarray(da.values, dtype=float)
+    t, ny, nx = values.shape
+    return _wrap_grid(_sen_slopes(values.reshape(t, ny * nx)), da)
 
 
 def mann_kendall_pvalue(da: xr.DataArray, autocorr_correct: bool = True) -> xr.DataArray:
     """Mann-Kendall p-value per pixel, Hamed-Rao corrected by default."""
-    return _apply_over_pixels(da, lambda x: _mk_pvalue_1d(x, autocorr_correct))
+    values = np.asarray(da.values, dtype=float)
+    t, ny, nx = values.shape
+    return _wrap_grid(_mk_pvalues(values.reshape(t, ny * nx), autocorr_correct), da)
 
 
 def trend_test(
