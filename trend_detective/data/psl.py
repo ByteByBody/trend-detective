@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+from typing import Callable
 from urllib.parse import urlencode
 
 import numpy as np
@@ -50,6 +51,68 @@ DATASETS: dict[str, tuple[str, str]] = {
 
 #: Attribution carried on every returned array.
 SOURCE_NAME = "NOAA PSL / NCEP-NCAR reanalysis"
+
+#: Conversion constants for the variables whose file units differ from the
+#: catalog. Each factor was checked against a live value, not assumed: see the
+#: per-function notes and docs/algorithms.md.
+SECONDS_PER_DAY = 86400.0
+WATER_DENSITY_KG_M3 = 1000.0
+#: The soil-moisture file is the 10-200 cm layer, 1.9 m thick.
+SOILW_LAYER_M = 1.9
+#: Latent heat of vaporization, the standard stand-in for a monthly mean.
+LATENT_HEAT_J_PER_KG = 2.5e6
+
+
+def prate_to_mm_per_day(da: xr.DataArray) -> xr.DataArray:
+    """PSL precipitation rate (Kg/m^2/s) to mm/day.
+
+    1 kg/m^2 of water is 1 mm, so this is only the seconds-per-day factor.
+    A July ITCZ cell reads 6.8e-5 Kg/m^2/s, which becomes 5.9 mm/day.
+    """
+    out = da * SECONDS_PER_DAY
+    out.attrs = dict(da.attrs, units="mm day-1")
+    return out
+
+
+prate_to_mm_per_day.units = "mm day-1"
+
+
+def soilw_to_kg_per_m2(da: xr.DataArray) -> xr.DataArray:
+    """PSL volumetric soil moisture (fraction) to kg/m^2 over 10-200 cm.
+
+    fraction x 1000 kg/m^3 x 1.9 m. An Amazon cell reads 0.26, i.e. 494 kg/m^2
+    of water in the layer, which is a plausible root-zone store.
+    """
+    out = da * (WATER_DENSITY_KG_M3 * SOILW_LAYER_M)
+    out.attrs = dict(da.attrs, units="kg m-2")
+    return out
+
+
+soilw_to_kg_per_m2.units = "kg m-2"
+
+
+def lhtfl_to_mm_per_day(da: xr.DataArray) -> xr.DataArray:
+    """PSL latent heat net flux (W/m^2) to mm/day of evaporated water.
+
+    W/m^2 / (J/kg) x s/day. Over the July tropics the file is *positive*
+    (mean +133.6 W/m^2 = 4.6 mm/day), so evaporation is already positive and
+    the sign is kept rather than flipped.
+    """
+    out = da / LATENT_HEAT_J_PER_KG * SECONDS_PER_DAY
+    out.attrs = dict(da.attrs, units="mm day-1")
+    return out
+
+
+lhtfl_to_mm_per_day.units = "mm day-1"
+
+#: PSL variable name -> the conversion to catalog units. A variable absent here
+#: already arrives in catalog units. Keyed by the name inside the file, not the
+#: catalog key, because that is what :func:`extract_grid` receives.
+CONVERSIONS: dict[str, Callable[[xr.DataArray], xr.DataArray]] = {
+    "prate": prate_to_mm_per_day,
+    "soilw": soilw_to_kg_per_m2,
+    "lhtfl": lhtfl_to_mm_per_day,
+}
 
 #: Readers xarray can use for the cached file, best first. ``scipy`` is the only
 #: one guaranteed to be installed; it reads the NetCDF3 that NCSS returns.
@@ -161,6 +224,13 @@ def extract_grid(
 
     units = da.attrs.get("units", "")
     out = da.transpose("time", "lat", "lon")
+    # Convert the file's raw units to catalog units here, at the source
+    # boundary, so nothing downstream ever sees a mixed-unit field. The cached
+    # file keeps PSL's own numbers, so re-extracting never double-converts.
+    convert = CONVERSIONS.get(name)
+    if convert is not None:
+        out = convert(out)
+        units = convert.units
     # PSL stores longitude 0..360; Leaflet and every other source use -180..180.
     # Handing raw values to the map pins the raster outside the world view, and
     # a click at -50 deg would snap to the wrong cell.
