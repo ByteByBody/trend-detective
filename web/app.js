@@ -195,6 +195,67 @@
     return [[minLat, minLon], [maxLat, maxLon]];
   }
 
+  function defaultCell(demo) {
+    // Prefer the centroid of the largest corrected patch: the biggest thing the
+    // correction actually stands behind. Fall back to the strongest corrected
+    // slope, then the grid centre, so the chart is never an empty box on load.
+    const mask = demo.corrected_mask;
+    const ny = mask.length;
+    const nx = ny ? mask[0].length : 0;
+    const seen = mask.map((row) => row.map(() => false));
+    let best = null;
+
+    for (let i = 0; i < ny; i++) {
+      for (let j = 0; j < nx; j++) {
+        if (!mask[i][j] || seen[i][j]) continue;
+        const stack = [[i, j]];
+        seen[i][j] = true;
+        const cells = [];
+        while (stack.length) {
+          const [r, c] = stack.pop();
+          cells.push([r, c]);
+          for (let dr = -1; dr <= 1; dr++) {
+            for (let dc = -1; dc <= 1; dc++) {
+              const rr = r + dr;
+              const cc = c + dc;
+              if (rr < 0 || cc < 0 || rr >= ny || cc >= nx) continue;
+              if (!mask[rr][cc] || seen[rr][cc]) continue;
+              seen[rr][cc] = true;
+              stack.push([rr, cc]);
+            }
+          }
+        }
+        if (!best || cells.length > best.length) best = cells;
+      }
+    }
+
+    if (best) {
+      const r = Math.round(best.reduce((s, p) => s + p[0], 0) / best.length);
+      const c = Math.round(best.reduce((s, p) => s + p[1], 0) / best.length);
+      return { lat: demo.lat[r], lon: demo.lon[c] };
+    }
+
+    let br = -1;
+    let bc = -1;
+    let bv = -Infinity;
+    for (let i = 0; i < ny; i++) {
+      for (let j = 0; j < nx; j++) {
+        if (!mask[i][j]) continue;
+        const v = demo.slope[i][j];
+        if (v !== null && isFinite(v) && Math.abs(v) > bv) {
+          bv = Math.abs(v);
+          br = i;
+          bc = j;
+        }
+      }
+    }
+    if (br >= 0) return { lat: demo.lat[br], lon: demo.lon[bc] };
+
+    const mi = Math.floor(ny / 2);
+    const mj = Math.floor(nx / 2);
+    return { lat: demo.lat[mi] || 0, lon: demo.lon[mj] || 0 };
+  }
+
   // --- rendering ------------------------------------------------------------
 
   const fmt = (value, unit, opts) => TDFormat.formatNumber(value, unit, opts);
@@ -263,6 +324,11 @@
         ? `Data: ${demo.source}, monthly means over 1980–2024, 5° grid.`
         : "";
     }
+
+    // Seed the chart with the biggest thing the correction stands behind, so
+    // the panel is never an empty box on first load.
+    const cell = defaultCell(demo);
+    loadSeries(cell.lat, cell.lon);
   }
 
   function renderError(message) {

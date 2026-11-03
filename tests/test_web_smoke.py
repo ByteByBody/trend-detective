@@ -244,3 +244,9 @@ def test_the_red_dots_have_a_visible_key():
 def test_the_variable_note_no_longer_repeats_the_source():
     js = client.get("/static/app.js").text
     assert "Source:" not in js  # the footer is the one place that names it
+
+
+def test_a_default_cell_is_selected_after_the_analysis_lands():
+    js = client.get("/static/app.js").text
+    assert "function defaultCell(" in js
+    assert "defaultCell(" in js.split("function renderDemo")[1]
