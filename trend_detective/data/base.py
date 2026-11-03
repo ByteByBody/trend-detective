@@ -1,9 +1,10 @@
 """Pluggable data sources.
 
 The analysis core and the API talk to a variable through a tiny interface —
-``load(variable) -> DataArray`` — so a live Earthdata fetcher (see
-``trend_detective.data.fetch``) can drop in without touching either. The
-cry-wolf slice ships the synthetic source only.
+``load(variable) -> DataArray`` — so a live fetcher can drop in without touching
+either. Two sources ship: ``synthetic`` (bundled, with known ground truth) and
+``power`` (live NASA MERRA-2 monthly grids, no API key; see
+``trend_detective.data.power``). The Earthdata-login fetcher stays deferred.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ from typing import Protocol
 import xarray as xr
 
 from trend_detective import config
-from trend_detective.data import sample
+from trend_detective.data import power, sample
 
 
 class DatasetSource(Protocol):
@@ -56,7 +57,10 @@ class SyntheticSource:
         return da
 
 
-_SOURCES: dict[str, type] = {"synthetic": SyntheticSource}
+_SOURCES: dict[str, type] = {
+    "synthetic": SyntheticSource,
+    "power": power.PowerRegionalSource,
+}
 
 
 def get_source(name: str) -> DatasetSource:

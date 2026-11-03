@@ -205,7 +205,10 @@
     el("stat-kept").textContent = fmtInt(demo.n_corrected);
     el("stat-threshold").textContent = demo.threshold.toFixed(4);
     el("stat-insufficient").textContent = fmtInt(demo.n_insufficient);
-    el("stat-morans").textContent = Number(demo.morans_i).toFixed(2);
+    el("stat-morans").textContent =
+      demo.morans_i === null || !Number.isFinite(Number(demo.morans_i))
+        ? "n/a"
+        : Number(demo.morans_i).toFixed(2);
     el("stat-valid").textContent = `${Math.round(demo.valid_fraction * 100)}%`;
 
     const unit = demo.units ? ` ${demo.units}/mo` : " per month";

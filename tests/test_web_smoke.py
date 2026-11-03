@@ -27,3 +27,16 @@ def test_index_exposes_diagnostics_and_keyboard_path():
 def test_static_assets_served():
     assert client.get("/static/app.js").status_code == 200
     assert client.get("/static/styles.css").status_code == 200
+
+
+def test_app_js_reports_undefined_morans_i_as_not_available():
+    # Real POWER data can leave the corrected mask empty, so `morans_i` arrives
+    # as null. `Number(null)` is 0, which would claim "no clustering" instead of
+    # "undefined"; the UI has to say so.
+    js = client.get("/static/app.js").text
+    lines = [line.strip() for line in js.splitlines()]
+    hits = [i for i, line in enumerate(lines) if "stat-morans" in line]
+    assert hits, "app.js no longer renders the Moran's I statistic"
+    block = " ".join(lines[hits[0] : hits[0] + 5])
+    assert "null" in block
+    assert "n/a" in block.lower()

@@ -243,13 +243,69 @@ count.
 - `GET /` → `web/index.html`; static assets under `/static`.
 
 **Pluggable data layer:** the API reads through `data.base.DatasetSource`
-(`load(variable) -> DataArray`). The shipped source is `SyntheticSource`; the deferred
-live fetcher is `data.fetch.EarthdataSource` (raises `NotImplementedError`). Swapping
-sources is a one-line change in `api/app.py` and touches no analysis code.
+(`load(variable) -> DataArray`). Sources registered by name: `synthetic`
+(`SyntheticSource`, the default) and `power` (`PowerRegionalSource`, live NASA
+MERRA-2 — see section 9). The deferred `data.fetch.EarthdataSource` still raises
+`NotImplementedError` for GES DISC. Selecting a source is a one-line change to
+`config.DATA_SOURCE` and touches no analysis code.
 
 ---
 
-## 9. Implementation notes / pitfalls
+## 9. Live NASA POWER source — `data/power.py`
+
+**Signature:** `PowerRegionalSource(bbox=None, start=None, end=None, fetch=None).load(variable) -> DataArray`
+with `parse_regional(payload) -> DataArray` and `tiles(bbox) -> list[box]` as pure helpers.
+
+Endpoint `power.larc.nasa.gov/api/temporal/monthly/regional` serves MERRA-2 monthly
+means on a 0.5° grid from 1981, **with no API key and no Earthdata login**. Probed
+constraints (all encoded in the client):
+
+- at most **10°** of latitude and longitude per request, else HTTP 422;
+- at most **one parameter** per request;
+- values keyed `YYYYMM`, plus an annual `YYYY13` row to discard;
+- missing cells are the sentinel `-999.0`.
+
+```
+boxes  = tiles(bbox)                      # equal spans, each <= 10 degrees
+parts  = [parse_regional(fetch(url(param, b, start, end))) for b in boxes]
+grid   = combine_by_coords(parts)         # or parts[0] when one tile
+
+parse_regional:
+  time  = sorted unique YYYYMM over all features, minus *13     # ints, ascending
+  lat   = unique latitudes, descending                          # north-up
+  lon   = unique longitudes, ascending
+  value[t,i,j] = payload value, or NaN where -999.0 or unreported
+```
+
+`combine_by_coords` returns a `Dataset` when tiles carry disjoint coordinates, so the
+single data variable is unwrapped back to a `DataArray`.
+
+**January alignment is mandatory.** `decomp.deseasonalize` assigns calendar months by
+*position* (`arange(n) % 12`), not by the `time` coordinate. POWER's monthly regional
+response starts at January of `start`, which keeps position and calendar month in
+phase; a series that began mid-year would have its climatology subtracted from the
+wrong months and would manufacture a trend.
+
+**Variable mapping** (`PARAMETERS`) lists only catalog variables whose POWER units
+match the catalog metadata, so the API never mislabels a series:
+
+| catalog key | POWER parameter | units |
+| --- | --- | --- |
+| `surface_temperature` | `T2M` | degC |
+| `precipitation` | `PRECTOTCORR` | mm/day |
+
+Any other key raises `KeyError` rather than silently substituting a different
+quantity. Defaults (`config.POWER_BBOX/START/END`) are the Greenland box
+60–70°N, 50–40°W, 1990–2024 → 420 × 21 × 17.
+
+**Measured (live, from a normal connection):** cold fetch 90 s for the box above,
+analysis 2.3 s; naive flags 247 pixels, correction keeps 122, Moran's I 0.87.
+Precipitation over the same box is the empty case: naive 1, corrected 0, so
+`morans_i` is undefined and serialises as `null`.
+
+---
+
+## 10. Implementation notes / pitfalls
 
 - **Ties:** if ties exist, MK's no-tie variance is slightly off; acceptable for this slice,
   noted as a limitation. BH ordering must be **stable** so equal p-values give a stable threshold.

@@ -29,3 +29,14 @@ DEMO_AUTOCORR = 0.5
 
 #: Data source used by the API when none is configured.
 DATA_SOURCE = "synthetic"
+
+#: Live NASA POWER source: bounding box as (lat_min, lat_max, lon_min, lon_max).
+#: Default is a Greenland box (cryosphere, long MERRA-2 record).
+POWER_BBOX = (60.0, 70.0, -50.0, -40.0)
+
+#: First and last year requested from POWER.
+POWER_START = 1990
+POWER_END = 2024
+
+#: Per-request timeout for POWER, in seconds (multi-tile boxes add requests).
+POWER_TIMEOUT = 120.0
