@@ -355,7 +355,7 @@
         }
       }
     }
-    return { lat: demo.lat[bi], lon: demo.lon[bj] };
+    return { lat: demo.lat[bi], lon: demo.lon[bj], i: bi, j: bj };
   }
 
   function nearestDot(key, latlng) {
@@ -384,6 +384,7 @@
 
   async function loadSeries(lat, lon) {
     const cell = nearest(lat, lon);
+    const trendMonthly = state.demo ? state.demo.slope[cell.i][cell.j] : null;
     // Drop a marker on both maps at the chosen cell.
     ["naive", "corrected"].forEach((key) => {
       const map = state.maps[key];
@@ -408,41 +409,83 @@
       );
       if (!r.ok) throw new Error(`request failed (${r.status})`);
       const body = await r.json();
-      drawChart(body);
+      drawChart(body, (state.demo && state.demo.units) || "", trendMonthly);
     } catch (err) {
       el("series-hint").textContent = `Could not load the series: ${err.message}.`;
     }
   }
 
-  function drawChart(body) {
+  function drawChart(body, units, trendMonthly) {
     if (typeof Plotly === "undefined") {
       el("chart").textContent = "Chart library unavailable.";
       return;
     }
     const calendar = body.time_kind === "calendar";
-    const trace = {
-      x: body.time_labels || body.time,
+    const xs = body.time_labels || body.time;
+    const series = {
+      x: xs,
       y: body.value,
       mode: "lines",
-      line: { color: "#0b3d91", width: 1.6 },
+      name: "monthly",
+      line: { color: "#1B3A6B", width: 1.6 },
       hovertemplate: calendar
         ? "%{x|%b %Y}<br>%{y:.3f}<extra></extra>"
         : "month %{x}<br>%{y:.3f}<extra></extra>",
     };
+
+    const traces = [series];
+    let trendText = "";
+    if (trendMonthly !== null && isFinite(trendMonthly)) {
+      // Theil-Sen line: the fitted monthly slope from the analysis, anchored on
+      // the series mean, so the statistic is visible and not just quoted.
+      const values = body.value;
+      const n = values.length;
+      let sum = 0;
+      let count = 0;
+      values.forEach((v) => {
+        if (v !== null && isFinite(v)) {
+          sum += v;
+          count += 1;
+        }
+      });
+      const meanY = count ? sum / count : 0;
+      const intercept = meanY - trendMonthly * ((n - 1) / 2);
+      traces.push({
+        x: xs,
+        y: values.map((_, k) => intercept + trendMonthly * k),
+        mode: "lines",
+        name: "trend",
+        line: { color: "#D33B30", width: 1.4, dash: "dash" },
+        hoverinfo: "skip",
+      });
+      const unit = units ? `${units} per decade` : "per decade";
+      trendText = `Trend ${fmt(trendMonthly * MONTHS_PER_DECADE, unit, {
+        decimals: 3,
+      })}`;
+    }
+
     const layout = {
-      margin: { l: 46, r: 12, t: 10, b: 36 },
+      margin: { l: 52, r: 12, t: trendText ? 26 : 10, b: 36 },
       paper_bgcolor: "rgba(0,0,0,0)",
       plot_bgcolor: "rgba(0,0,0,0)",
-      font: { family: "Space Grotesk, system-ui, sans-serif", size: 11, color: "#131a2a" },
+      font: { family: "Instrument Sans, system-ui, sans-serif", size: 11, color: "#0E1524" },
+      title: trendText
+        ? { text: trendText, x: 0, xanchor: "left", font: { size: 11 } }
+        : undefined,
+      showlegend: false,
       xaxis: {
         title: { text: calendar ? "date" : "month index" },
         type: calendar ? "date" : "-",
-        gridcolor: "#e4e8ee",
+        gridcolor: "#E4E8EE",
         zeroline: false,
       },
-      yaxis: { title: { text: "value" }, gridcolor: "#e4e8ee", zeroline: false },
+      yaxis: {
+        title: { text: units || "value" },
+        gridcolor: "#E4E8EE",
+        zeroline: false,
+      },
     };
-    Plotly.react("chart", [trace], layout, { displayModeBar: false, responsive: true });
+    Plotly.react("chart", traces, layout, { displayModeBar: false, responsive: true });
   }
 
   // --- catalog --------------------------------------------------------------

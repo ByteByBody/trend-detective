@@ -250,3 +250,11 @@ def test_a_default_cell_is_selected_after_the_analysis_lands():
     js = client.get("/static/app.js").text
     assert "function defaultCell(" in js
     assert "defaultCell(" in js.split("function renderDemo")[1]
+
+
+def test_chart_titles_its_axis_with_units_and_draws_the_trend():
+    js = client.get("/static/app.js").text
+    assert "function drawChart(body, units" in js  # units flow into the axis
+    assert "yaxis" in js and "title" in js
+    assert "trendMonthly" in js  # the fitted line is drawn
+    assert "toExponential" not in js
