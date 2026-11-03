@@ -130,6 +130,23 @@ def test_demo_endpoint_shape():
     assert len(body["naive_mask"][0]) == len(body["lon"])
 
 
+def test_demo_exposes_a_per_pixel_p_value_grid_for_the_hover_readout():
+    body = client.get("/demo/soil_moisture_rootzone").json()
+
+    assert len(body["p_value"]) == len(body["lat"])
+    assert len(body["p_value"][0]) == len(body["lon"])
+    # The dots exist to be inspected, so at least one contested cell must carry
+    # a readable number rather than null everywhere.
+    contested = [
+        (i, j)
+        for i, row in enumerate(body["naive_mask"])
+        for j, flagged in enumerate(row)
+        if flagged
+    ]
+    assert contested
+    assert any(body["p_value"][i][j] is not None for i, j in contested)
+
+
 def test_catalog_reports_the_active_source_not_the_nominal_product(monkeypatch):
     # The catalog names the product we would ideally use (GLDAS etc.). Serving
     # a different source under that label is false attribution.

@@ -161,6 +161,25 @@
           bubblingMouseEvents: false,
         });
         dot.on("click", () => loadSeries(lat, lon));
+        // A dot is a claim under dispute, so it answers on hover with the
+        // numbers behind the verdict: where it is, the trend per decade, and
+        // the p-value the field-wide cutoff rejected.
+        const slope = demo.slope[i][j];
+        const p = demo.p_value ? demo.p_value[i][j] : null;
+        const slopeText =
+          slope === null || slope === undefined || !isFinite(slope)
+            ? "trend n/a"
+            : `trend ${fmt(slope * MONTHS_PER_DECADE,
+                demo.units ? `${demo.units} per decade` : "per decade",
+                { decimals: 3 })}`;
+        dot.bindTooltip(
+          `<strong>lat ${fmt(lat, "°", { decimals: 1 })}, ` +
+            `lon ${fmt(lon, "°", { decimals: 1 })}</strong><br>` +
+            `${slopeText}<br>` +
+            `p-value ${fmt(p, "", { decimals: 4 })}<br>` +
+            "dropped: the field-wide test will not stand behind it",
+          { direction: "top", sticky: true, className: "dot-tip" }
+        );
         group.addLayer(dot);
       });
     });

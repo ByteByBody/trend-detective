@@ -108,6 +108,9 @@ def _demo_body(variable: str) -> dict:
         "naive_mask": _mask(res.naive_mask.values),
         "corrected_mask": _mask(res.corrected_mask.values),
         "slope": _grid(slope),
+        # Per-pixel p-values so a dot's hover readout can quote the number the
+        # verdict rests on, not just the verdict.
+        "p_value": _grid(res.p_value.values),
     }
 
 

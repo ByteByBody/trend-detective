@@ -241,6 +241,15 @@ def test_the_red_dots_have_a_visible_key():
     assert "contested" in html.lower() or "dropped" in html.lower()
 
 
+def test_each_dot_answers_with_its_own_numbers_on_hover():
+    js = client.get("/static/app.js").text
+    # The dot is the whole point: it has to say which cell it is, what the
+    # trend is, and how strongly it was contested, without a click.
+    assert "bindTooltip" in js
+    assert "p_value" in js
+    assert "per decade" in js
+
+
 def test_the_variable_note_no_longer_repeats_the_source():
     js = client.get("/static/app.js").text
     assert "Source:" not in js  # the footer is the one place that names it
