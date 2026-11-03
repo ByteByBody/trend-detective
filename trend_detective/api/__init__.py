@@ -1,1 +1,1 @@
-"""HTTP API layer."""
+"""Trend Detective analysis package."""
