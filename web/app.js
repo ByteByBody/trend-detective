@@ -44,6 +44,8 @@
     selected: null,
     // Variable and cell asked for by the URL, applied once the catalog lands.
     initial: null,
+    // Position in the p-sorted contested-cell walk (see the arrow keys).
+    stepIndex: -1,
   };
 
   const el = (id) => document.getElementById(id);
@@ -626,6 +628,7 @@
 
   function selectVariable(key, button) {
     state.variable = key;
+    state.stepIndex = -1;
     document.querySelectorAll(".seg").forEach((b) => b.setAttribute("aria-checked", "false"));
     if (button) button.setAttribute("aria-checked", "true");
     const v = state.catalogByKey[key];
@@ -769,6 +772,20 @@
             e.preventDefault();
             const c = map.getCenter();
             loadSeries(c.lat, c.lng);
+            return;
+          }
+          // Left and right walk the contested cells in p-value order, the same
+          // order the list uses, so the keyboard hears the same story.
+          if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+            const cells = state.demo ? topContested(state.demo, Infinity) : [];
+            if (!cells.length) return;
+            e.preventDefault();
+            const step = e.key === "ArrowRight" ? 1 : -1;
+            state.stepIndex =
+              (state.stepIndex + step + cells.length) % cells.length;
+            const cell = cells[state.stepIndex];
+            map.panTo([cell.lat, cell.lon]);
+            loadSeries(cell.lat, cell.lon);
           }
         });
       }

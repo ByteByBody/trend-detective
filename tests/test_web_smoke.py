@@ -295,3 +295,8 @@ def test_the_most_contested_cells_are_listed_and_clickable():
     js = client.get("/static/app.js").text
     assert "function topContested(" in js
     assert "map.flyTo" in js
+
+
+def test_arrow_keys_step_through_contested_cells():
+    js = client.get("/static/app.js").text
+    assert "ArrowRight" in js and "ArrowLeft" in js
