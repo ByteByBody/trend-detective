@@ -275,3 +275,9 @@ def test_the_chart_can_be_resized_and_the_height_persists():
     js = client.get("/static/app.js").text
     assert "td.chartHeight" in js
     assert "Plots.resize" in js
+
+
+def test_the_selection_is_kept_in_the_url():
+    js = client.get("/static/app.js").text
+    assert "history.replaceState" in js
+    assert "URLSearchParams" in js

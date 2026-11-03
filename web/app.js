@@ -40,6 +40,10 @@
     // The mask each panel will snap a click to; null means no dots on it.
     dots: { naive: null, corrected: null },
     colors: { naive: "#d6453d", corrected: "#0f7a6b" },
+    // The cell currently charted, so the URL can carry it across a reload.
+    selected: null,
+    // Variable and cell asked for by the URL, applied once the catalog lands.
+    initial: null,
   };
 
   const el = (id) => document.getElementById(id);
@@ -345,8 +349,14 @@
     }
 
     // Seed the chart with the biggest thing the correction stands behind, so
-    // the panel is never an empty box on first load.
-    const cell = defaultCell(demo);
+    // the panel is never an empty box on first load — unless the URL already
+    // named the cell to inspect.
+    const asked = state.initial;
+    state.initial = null;
+    const cell =
+      asked && asked.lat !== null && asked.lon !== null
+        ? { lat: asked.lat, lon: asked.lon }
+        : defaultCell(demo);
     loadSeries(cell.lat, cell.lon);
   }
 
@@ -403,6 +413,8 @@
 
   async function loadSeries(lat, lon) {
     const cell = nearest(lat, lon);
+    state.selected = { lat: cell.lat, lon: cell.lon };
+    writeUrl();
     const trendMonthly = state.demo ? state.demo.slope[cell.i][cell.j] : null;
     // Drop a marker on both maps at the chosen cell.
     ["naive", "corrected"].forEach((key) => {
@@ -507,6 +519,37 @@
     Plotly.react("chart", traces, layout, { displayModeBar: false, responsive: true });
   }
 
+  // --- url state ------------------------------------------------------------
+
+  function writeUrl() {
+    // A dashboard you cannot link to is a dashboard only you can show. Keep the
+    // variable and the charted cell in the URL, written without adding history
+    // entries on every map click.
+    if (!state.variable) return;
+    const params = new URLSearchParams();
+    params.set("variable", state.variable);
+    if (state.selected) {
+      params.set("lat", state.selected.lat.toFixed(2));
+      params.set("lon", state.selected.lon.toFixed(2));
+    }
+    history.replaceState(null, "", `${location.pathname}?${params.toString()}`);
+  }
+
+  function readUrl() {
+    const params = new URLSearchParams(location.search);
+    const rawLat = params.get("lat");
+    const rawLon = params.get("lon");
+    const lat = rawLat === null ? null : Number(rawLat);
+    const lon = rawLon === null ? null : Number(rawLon);
+    const variable = params.get("variable");
+    if (!variable && !isFinite(lat) && !isFinite(lon)) return null;
+    return {
+      variable: variable || null,
+      lat: isFinite(lat) && lat !== null ? lat : null,
+      lon: isFinite(lon) && lon !== null ? lon : null,
+    };
+  }
+
   // --- catalog --------------------------------------------------------------
 
   function selectVariable(key, button) {
@@ -515,6 +558,7 @@
     if (button) button.setAttribute("aria-checked", "true");
     const v = state.catalogByKey[key];
     el("variable-note").textContent = v ? `${v.label} — ${v.description}` : "";
+    writeUrl();
     loadDemo(key);
   }
 
@@ -526,7 +570,8 @@
       const list = await r.json();
       state.catalogByKey = {};
       container.innerHTML = "";
-      list.forEach((v, idx) => {
+      const buttons = {};
+      list.forEach((v) => {
         state.catalogByKey[v.key] = v;
         const b = document.createElement("button");
         b.type = "button";
@@ -536,8 +581,13 @@
         b.textContent = v.label;
         b.addEventListener("click", () => selectVariable(v.key, b));
         container.appendChild(b);
-        if (idx === 0) selectVariable(v.key, b);
+        buttons[v.key] = b;
       });
+      // Honour `?variable=` if it names something the source serves; otherwise
+      // fall back to the first variable, the same as a cold visit.
+      const wanted = state.initial && state.initial.variable;
+      const start = (wanted && list.find((v) => v.key === wanted)) || list[0];
+      if (start) selectVariable(start.key, buttons[start.key]);
       container.setAttribute("aria-busy", "false");
     } catch (err) {
       container.setAttribute("aria-busy", "false");
@@ -600,6 +650,7 @@
   }
 
   function init() {
+    state.initial = readUrl();
     state.maps.naive = makeMap("map-naive");
     initChartResize();
     state.maps.corrected = makeMap("map-corrected");
