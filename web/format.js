@@ -18,6 +18,9 @@
   function defaultDecimals(v) {
     var a = Math.abs(v);
     if (a === 0) return 2;
+    // A whole number is a count (pixels, times, regions), not a measurement;
+    // it never needs a fractional tail. Measurements are rarely integers.
+    if (Number.isInteger(v)) return 0;
     if (a >= 1000) return 0;
     if (a >= 100) return 1;
     if (a >= 1) return 2;

@@ -29,6 +29,13 @@ def test_counts_get_thousands_separators_and_their_unit():
     assert _call("formatNumber(2014, 'pixels')") == "2,014\u2009pixels"
 
 
+def test_whole_counts_never_grow_a_decimal_tail():
+    # Regression: 806 and 153 are counts, not measurements; the magnitude rule
+    # used to render them as "806.0 pixels" and "153.0 times".
+    assert _call("formatNumber(806, 'pixels')") == "806\u2009pixels"
+    assert _call("formatNumber(153.0, 'times')") == "153\u2009times"
+
+
 def test_no_scientific_notation_for_a_tiny_slope():
     text = _call("formatNumber(0.00012, '°C per decade', {decimals: 3})")
     assert not re.search(r"\d[eE][+-]?\d", text)  # no exponent form
