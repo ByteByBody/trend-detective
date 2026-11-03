@@ -2,10 +2,107 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Trend Detective</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Trend Detective — naive vs corrected climate trends</title>
+  <meta name="description" content="The same satellite data, two verdicts: a raw per-pixel test that cries wolf, and a field-significance-corrected test that keeps only real, connected trends." />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Spectral:ital,wght@0,400;0,600;1,400&display=swap"
+    rel="stylesheet" />
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
-  <h1>Trend Detective</h1>
-  <p>Frontend placeholder — built out in the next task.</p>
+  <a class="skip" href="#compare">Skip to the comparison</a>
+
+  <header class="masthead">
+    <div class="masthead__id">
+      <h1 class="wordmark">Trend&nbsp;Detective</h1>
+      <p class="strap">
+        The same satellite record, two readings. One of them cries wolf.
+      </p>
+    </div>
+    <p class="provenance">
+      NASA Space Apps 2026 · cry-wolf slice
+    </p>
+  </header>
+
+  <main>
+    <section class="controls" aria-label="Variable">
+      <p class="controls__label" id="var-label">Variable</p>
+      <div class="segmented" id="variable" role="radiogroup" aria-labelledby="var-label" aria-busy="true"></div>
+      <p class="controls__note" id="variable-note">Loading the catalog…</p>
+    </section>
+
+    <section id="compare" class="compare" aria-labelledby="compare-heading">
+      <h2 class="visually-hidden" id="compare-heading">Naive versus corrected trend maps</h2>
+
+      <article class="panel panel--naive">
+        <header class="panel__head">
+          <h3 class="panel__title">Naive</h3>
+          <p class="panel__sub">Every pixel the raw test calls significant.</p>
+        </header>
+        <div class="map" id="map-naive" role="img"
+             aria-label="Map of pixels flagged by the raw per-pixel test"></div>
+        <p class="panel__tally" id="tally-naive">—</p>
+      </article>
+
+      <div class="verdict" aria-live="polite">
+        <p class="verdict__line" id="verdict-line">Reading the field…</p>
+        <p class="verdict__note" id="verdict-note">&nbsp;</p>
+      </div>
+
+      <article class="panel panel--corrected">
+        <header class="panel__head">
+          <h3 class="panel__title">Corrected</h3>
+          <p class="panel__sub">False-discovery control, then connected patches only.</p>
+        </header>
+        <div class="map" id="map-corrected" role="img"
+             aria-label="Map of pixels surviving the corrected test"></div>
+        <p class="panel__tally" id="tally-corrected">—</p>
+      </article>
+    </section>
+
+    <section class="detail">
+      <article class="evidence">
+        <h2 class="section-title">What changed</h2>
+        <dl class="stats" id="evidence">
+          <div class="stat"><dt>Flagged, naive</dt><dd id="stat-naive">—</dd></div>
+          <div class="stat"><dt>Flagged, corrected</dt><dd id="stat-corrected">—</dd></div>
+          <div class="stat"><dt>False alarms removed</dt><dd id="stat-removed">—</dd></div>
+          <div class="stat"><dt>Real pixels kept</dt><dd id="stat-kept">—</dd></div>
+          <div class="stat"><dt>p-value cutoff</dt><dd id="stat-threshold">—</dd></div>
+          <div class="stat"><dt>Data present</dt><dd id="stat-valid">—</dd></div>
+        </dl>
+        <div class="legend" aria-hidden="true">
+          <span class="legend__caption">Trend slope</span>
+          <span class="legend__ramp" id="slope-ramp"></span>
+          <span class="legend__ends"><span id="slope-min">—</span><span id="slope-max">—</span></span>
+        </div>
+      </article>
+
+      <article class="series">
+        <h2 class="section-title">One cell, month by month</h2>
+        <p class="series__hint" id="series-hint">Click either map to read a cell's history.</p>
+        <div id="chart" class="chart" aria-label="Monthly series for the selected cell"></div>
+      </article>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <p>
+      Synthetic grid with a known answer, so the false alarms can be counted.
+      Correction: Benjamini–Hochberg FDR at q = 0.05, then connected patches of
+      five pixels or more. Autocorrelation handled with a Hamed–Rao variance
+      correction.
+    </p>
+  </footer>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+  <script src="/static/app.js"></script>
 </body>
 </html>
