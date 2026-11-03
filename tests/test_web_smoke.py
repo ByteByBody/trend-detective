@@ -281,3 +281,9 @@ def test_the_selection_is_kept_in_the_url():
     js = client.get("/static/app.js").text
     assert "history.replaceState" in js
     assert "URLSearchParams" in js
+
+
+def test_a_cold_analysis_shows_progress_rather_than_a_blank_map():
+    js = client.get("/static/app.js").text
+    assert "function setBusy(" in js
+    assert "first run" in js.lower()

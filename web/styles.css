@@ -156,6 +156,18 @@ main { padding: 0 var(--gutter); }
   color: var(--ink-soft);
 }
 
+.busy {
+  margin: 0 0 1rem;
+  padding: 0.7rem 1rem;
+  border-left: 3px solid var(--signal);
+  background: var(--panel);
+  font-size: 0.9rem;
+  color: var(--ink);
+}
+.busy[hidden] {
+  display: none;
+}
+
 /* ---- comparison ---- */
 
 .compare {

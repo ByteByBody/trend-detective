@@ -596,7 +596,29 @@
     }
   }
 
+  function setBusy(on) {
+    // A cold analysis can take minutes; a blank map reads as broken. Say what
+    // is happening and stop the variable control from stacking requests.
+    const busy = el("busy");
+    if (busy) {
+      busy.hidden = !on;
+      if (on) {
+        busy.textContent =
+          "First run: downloading the field and computing the trend. This " +
+          "can take a few minutes; later visits reuse the cached analysis.";
+      }
+    }
+    const control = el("variable");
+    if (control) {
+      control.setAttribute("aria-busy", on ? "true" : "false");
+      control.querySelectorAll("button").forEach((b) => {
+        b.disabled = on;
+      });
+    }
+  }
+
   async function loadDemo(variable) {
+    setBusy(true);
     el("verdict-line").textContent = "Reading the field…";
     el("verdict-note").textContent = "\u00a0";
     try {
@@ -605,6 +627,8 @@
       renderDemo(await r.json());
     } catch (err) {
       renderError(`Could not load the analysis: ${err.message}.`);
+    } finally {
+      setBusy(false);
     }
   }
 
