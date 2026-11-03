@@ -74,20 +74,16 @@
   function slopeToDataURL(slope) {
     const ny = slope.length;
     const nx = slope[0].length;
-    let min = Infinity;
-    let max = -Infinity;
+    const flat = [];
     for (let i = 0; i < ny; i++) {
       for (let j = 0; j < nx; j++) {
         const v = slope[i][j];
-        if (v === null || !isFinite(v)) continue;
-        if (v < min) min = v;
-        if (v > max) max = v;
+        if (v !== null && isFinite(v)) flat.push(v);
       }
     }
-    if (!isFinite(min) || max === min) {
-      min = 0;
-      max = 1;
-    }
+    // Scale to the 2nd-98th percentile: one extreme pixel would otherwise
+    // flatten the whole ramp, and the legend would quote that outlier.
+    const { min, max } = TDFormat.slopeRange(flat);
     const span = max - min || 1;
     const canvas = document.createElement("canvas");
     canvas.width = nx;
@@ -179,12 +175,12 @@
             ? "trend n/a"
             : `trend ${fmt(slope * MONTHS_PER_DECADE,
                 demo.units ? `${demo.units} per decade` : "per decade",
-                { decimals: 3 })}`;
+                { significant: 2 })}`;
         dot.bindTooltip(
           `<strong>lat ${fmt(lat, "°", { decimals: 1 })}, ` +
             `lon ${fmt(lon, "°", { decimals: 1 })}</strong><br>` +
             `${slopeText}<br>` +
-            `p-value ${fmt(p, "", { decimals: 4 })}<br>` +
+            `p-value ${fmt(p, "", { significant: 3 })}<br>` +
             "dropped: the field-wide test will not stand behind it",
           { direction: "top", sticky: true, className: "dot-tip" }
         );
@@ -335,13 +331,13 @@
       const pText =
         cell.p === null || cell.p === undefined
           ? "p n/a"
-          : `p ${fmt(cell.p, "", { decimals: 4 })}`;
+          : `p ${fmt(cell.p, "", { significant: 3 })}`;
       const slopeText =
         cell.slope === null || cell.slope === undefined || !isFinite(cell.slope)
           ? "trend n/a"
           : fmt(cell.slope * MONTHS_PER_DECADE,
               units ? `${units} per decade` : "per decade",
-              { decimals: 3 });
+              { significant: 2 });
       readout.textContent = `${pText} · ${slopeText}`;
 
       b.appendChild(place);
@@ -468,7 +464,7 @@
       matches.forEach((match, idx) => {
         const vector = Object.entries(match.vector || {})
           .filter(([, v]) => v !== null && v !== undefined)
-          .map(([name, v]) => `${name} ${fmt(v, "", { decimals: 3 })}`)
+          .map(([name, v]) => `${name} ${fmt(v, "", { significant: 2 })}`)
           .join(" · ");
         drawRegion(
           match,
@@ -640,14 +636,14 @@
     el("verdict-note").textContent =
       "A false alarm is a pixel the raw per-pixel test calls a trend and the " +
       "corrected test will not stand behind: it fails the field-wide cutoff " +
-      `(p \u2264 ${fmt(demo.threshold, "p", { decimals: 4 })}) or sits alone, ` +
+      `(p \u2264 ${fmt(demo.threshold, "p", { significant: 3 })}) or sits alone, ` +
       "outside any patch of five.";
 
     el("stat-naive").textContent = fmt(demo.n_naive, "pixels");
     el("stat-corrected").textContent = fmt(demo.n_corrected, "pixels");
     el("stat-removed").textContent = fmt(-removed, "pixels");
     el("stat-kept").textContent = fmt(demo.n_corrected, "pixels");
-    el("stat-threshold").textContent = fmt(demo.threshold, "p", { decimals: 4 });
+    el("stat-threshold").textContent = fmt(demo.threshold, "p", { significant: 3 });
     el("stat-insufficient").textContent = fmt(demo.n_insufficient, "pixels");
     el("stat-morans").textContent =
       demo.morans_i === null || !Number.isFinite(Number(demo.morans_i))
@@ -660,7 +656,7 @@
     // The legend shows the slope the climate way: per decade, not per month.
     const perDecade = (v) =>
       fmt(v * MONTHS_PER_DECADE, units ? `${units} per decade` : "per decade", {
-        decimals: 3,
+        significant: 2,
       });
     el("slope-min").textContent = perDecade(slopeImg.min);
     el("slope-max").textContent = perDecade(slopeImg.max);
@@ -833,7 +829,7 @@
       });
       const unit = units ? `${units} per decade` : "per decade";
       trendText = `Trend ${fmt(trendMonthly * MONTHS_PER_DECADE, unit, {
-        decimals: 3,
+        significant: 2,
       })}`;
     }
 
@@ -884,7 +880,7 @@
     const lat = rawLat === null ? null : Number(rawLat);
     const lon = rawLon === null ? null : Number(rawLon);
     const variable = params.get("variable");
-    if (!variable && !isFinite(lat) && !isFinite(lon)) return null;
+    if (!variable && lat === null && lon === null) return null;
     return {
       variable: variable || null,
       lat: isFinite(lat) && lat !== null ? lat : null,
@@ -986,12 +982,28 @@
     const stored = Number(localStorage.getItem("td.chartHeight"));
     if (stored > 0) chart.style.height = `${stored}px`;
 
+    // Keep the separator's ARIA value in step with the height, so assistive
+    // tech hears the current chart size, not a fixed placeholder.
+    const announce = (h) => {
+      grip.setAttribute("aria-valuemin", "180");
+      grip.setAttribute("aria-valuemax", String(Math.max(1200, h)));
+      grip.setAttribute("aria-valuenow", String(h));
+      grip.setAttribute("aria-valuetext", `${h} pixels tall`);
+    };
+
     const apply = (height) => {
       const h = Math.max(180, Math.round(height));
       chart.style.height = `${h}px`;
       if (typeof Plotly !== "undefined" && Plotly.Plots) Plotly.Plots.resize(chart);
       localStorage.setItem("td.chartHeight", String(h));
+      announce(h);
     };
+
+    announce(
+      Math.round(
+        stored > 0 ? stored : chart.getBoundingClientRect().height || 320
+      )
+    );
 
     let startY = 0;
     let startH = 0;

@@ -275,6 +275,13 @@ def test_the_chart_can_be_resized_and_the_height_persists():
     js = client.get("/static/app.js").text
     assert "td.chartHeight" in js
     assert "Plots.resize" in js
+    # The separator reports its current size to assistive tech, not a constant.
+    assert "aria-valuenow" in js
+
+
+def test_the_slope_ramp_uses_the_clipped_range_helper():
+    js = client.get("/static/app.js").text
+    assert "slopeRange" in js  # not a bare min-max scan
 
 
 def test_the_selection_is_kept_in_the_url():
