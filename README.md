@@ -97,10 +97,12 @@ Run the web app (serves the maps at `/`):
 python -m uvicorn trend_detective.api.app:app --reload
 ```
 
-The two panels are square Leaflet maps over NASA GIBS Blue Marble imagery, and
-every flagged cell is a dot: red for the naive verdict, green for the corrected
-one. Click any dot to plot that cell's monthly series; a click between dots
-selects the nearest flagged cell, so a near miss still reads the right place.
+The two panels are square Leaflet maps over NASA GIBS Blue Marble imagery. The
+naive panel marks only the pixels it is being accused of: the ones the raw test
+flags and the corrected test drops — 49 of 2,014 on the shipped PSL defaults.
+The corrected panel has nothing left to mark, which is the point. Click any dot
+to plot that cell's monthly series; a click between dots selects the nearest
+marked cell, so a near miss still reads the right place.
 
 `GET /health` returns `{"status": "ok"}` without touching the data source, so a
 probe never fails just because a cold fetch is in progress.

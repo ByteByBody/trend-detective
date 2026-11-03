@@ -44,10 +44,10 @@
       <article class="panel panel--naive">
         <header class="panel__head">
           <h3 class="panel__title">Naive</h3>
-          <p class="panel__sub">Every pixel the raw test calls significant.</p>
+          <p class="panel__sub">Every pixel the raw test calls significant. The red dots are the claims the correction drops.</p>
         </header>
         <div class="map" id="map-naive" role="region" tabindex="0"
-             aria-label="Map of pixels flagged by the raw per-pixel test. Press Enter to read the cell at the map center."></div>
+             aria-label="Map of the pixels the raw test flags and the corrected test drops. Press Enter to read the cell at the map center."></div>
         <p class="panel__tally" id="tally-naive">—</p>
       </article>
 
@@ -59,10 +59,10 @@
       <article class="panel panel--corrected">
         <header class="panel__head">
           <h3 class="panel__title">Corrected</h3>
-          <p class="panel__sub">False-discovery control, then connected patches only.</p>
+          <p class="panel__sub">After false-discovery control and the patch gate. None of those claims survive.</p>
         </header>
         <div class="map" id="map-corrected" role="region" tabindex="0"
-             aria-label="Map of pixels surviving the corrected test. Press Enter to read the cell at the map center."></div>
+             aria-label="Map after correction, with no contested pixel left. Press Enter to read the cell at the map center."></div>
         <p class="panel__tally" id="tally-corrected">—</p>
       </article>
     </section>

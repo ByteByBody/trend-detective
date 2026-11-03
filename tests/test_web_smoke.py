@@ -78,12 +78,28 @@ def test_app_js_attributes_the_data_to_its_source():
     assert "demo.source" in js
 
 
+def test_the_verdict_note_says_what_a_false_alarm_is():
+    # "False alarms removed" is jargon on its own: the page has to say what the
+    # naive test claimed and why the corrected test will not stand behind it.
+    js = client.get("/static/app.js").text
+    assert "raw per-pixel test calls a trend" in js
+    assert "will not stand behind" in js
+
+
 def test_flagged_cells_are_drawn_as_dots_not_filled_cells():
     # Solid 5-degree blocks painted over the imagery; the map disappeared under
     # them. A dot per flagged cell leaves the basemap readable.
     js = client.get("/static/app.js").text
     assert "L.circleMarker" in js
     assert "maskToDataURL" not in js
+
+
+def test_only_the_contested_pixels_are_marked():
+    # Thousands of dots buried the map. The dots that matter are the ones the
+    # correction drops: those are the claims being argued about.
+    js = client.get("/static/app.js").text
+    assert "function contestedMask(demo)" in js
+    assert "drawDots(\"corrected\"" not in js
 
 
 def test_each_dot_can_be_clicked():

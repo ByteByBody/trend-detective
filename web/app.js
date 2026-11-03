@@ -16,8 +16,8 @@
     'Imagery &copy; <a href="https://earthdata.nasa.gov/gibs">NASA EOSDIS GIBS</a>';
   const TILE_MAX_NATIVE_ZOOM = 8;
 
-  // Flagged cells are drawn as small dots, so the basemap stays readable.
-  const DOT_RADIUS = 3;
+  // Only the contested pixels get a dot: the claims the corrected test drops.
+  const CONTESTED_RADIUS = 4.5;
   // The slope raster sits beneath the dots as a faint wash of magnitude.
   const SLOPE_OPACITY = 0.22;
 
@@ -37,6 +37,8 @@
     maps: { naive: null, corrected: null },
     overlays: { naive: null, corrected: null, marker: null },
     renderers: { naive: null, corrected: null },
+    // The mask each panel will snap a click to; null means no dots on it.
+    dots: { naive: null, corrected: null },
     colors: { naive: "#d6453d", corrected: "#0f7a6b" },
   };
 
@@ -124,11 +126,27 @@
     return map;
   }
 
+  function contestedMask(demo) {
+    // The pixels the raw test flags and the corrected test drops: the claims
+    // actually being argued about, and the only ones worth marking.
+    return demo.naive_mask.map((row, i) =>
+      row.map((on, j) => Boolean(on) && !demo.corrected_mask[i][j])
+    );
+  }
+
+  function clearDots(key) {
+    const map = state.maps[key];
+    if (map && state.overlays[key + "Dots"]) {
+      map.removeLayer(state.overlays[key + "Dots"]);
+    }
+    state.overlays[key + "Dots"] = null;
+    state.dots[key] = null;
+  }
+
   function drawDots(key, demo, mask, hex) {
     const map = state.maps[key];
     if (!map) return;
-    if (state.overlays[key + "Dots"]) map.removeLayer(state.overlays[key + "Dots"]);
-    // Canvas keeps a few thousand markers cheap to pan and zoom.
+    clearDots(key);
     const renderer = state.renderers[key] || (state.renderers[key] = L.canvas({ padding: 0.4 }));
     const group = L.layerGroup();
     demo.lat.forEach((lat, i) => {
@@ -136,10 +154,10 @@
         if (!mask[i][j]) return;
         const dot = L.circleMarker([lat, lon], {
           renderer: renderer,
-          radius: DOT_RADIUS,
+          radius: CONTESTED_RADIUS,
           weight: 0,
           fillColor: hex,
-          fillOpacity: 0.9,
+          fillOpacity: 0.95,
           bubblingMouseEvents: false,
         });
         dot.on("click", () => loadSeries(lat, lon));
@@ -148,6 +166,7 @@
     });
     group.addTo(map);
     state.overlays[key + "Dots"] = group;
+    state.dots[key] = mask;
   }
 
   function drawSlopeOverlays(shapeUrl) {
@@ -193,8 +212,10 @@
 
     const slopeImg = slopeToDataURL(demo.slope);
     drawSlopeOverlays(slopeImg.url);
-    drawDots("naive", demo, demo.naive_mask, state.colors.naive);
-    drawDots("corrected", demo, demo.corrected_mask, state.colors.corrected);
+    // Dots mark only the contested claims, and only on the panel that makes
+    // them. The corrected panel has none left to argue about.
+    drawDots("naive", demo, contestedMask(demo), state.colors.naive);
+    clearDots("corrected");
 
     el("tally-naive").textContent = `${fmtInt(demo.n_naive)} pixels flagged`;
     el("tally-corrected").textContent = `${fmtInt(demo.n_corrected)} pixels flagged`;
@@ -205,7 +226,9 @@
         ? `Cried wolf ${fmtInt(removed)} ${removed === 1 ? "time" : "times"}.`
         : `Kept ${fmtInt(-removed)} more pixels.`;
     el("verdict-note").textContent =
-      "The corrected test keeps only connected patches, so isolated pixels vanish.";
+      "A false alarm is a pixel the raw per-pixel test calls a trend and the " +
+      "corrected test will not stand behind: it fails the field-wide cutoff " +
+      `(p \u2264 ${demo.threshold.toFixed(4)}) or sits alone, outside any patch of five.`;
 
     el("stat-naive").textContent = fmtInt(demo.n_naive);
     el("stat-corrected").textContent = fmtInt(demo.n_corrected);
@@ -262,8 +285,8 @@
     // The closest *flagged* cell to the cursor, so a click between dots still
     // selects a dot rather than an unflagged cell under the pointer.
     const demo = state.demo;
-    if (!demo) return null;
-    const mask = key === "naive" ? demo.naive_mask : demo.corrected_mask;
+    const mask = state.dots[key];
+    if (!demo || !mask) return null;
     const scale = Math.cos((latlng.lat * Math.PI) / 180);
     let best = null;
     let bestD = Infinity;
