@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trend-detective"
+version = "0.1.0"
+description = "NASA Space Apps 2026 — Be An Earth System Trend Detective (cry-wolf slice)"
+requires-python = ">=3.13"
+dependencies = [
+    "numpy",
+    "scipy",
+    "xarray",
+    "pandas",
+    "fastapi",
+    "uvicorn",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "httpx"]
+
+[tool.setuptools]
+packages = ["trend_detective", "trend_detective.data", "trend_detective.analysis", "trend_detective.api"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

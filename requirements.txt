@@ -1,0 +1,8 @@
+numpy
+scipy
+xarray
+pandas
+fastapi
+uvicorn
+httpx
+pytest
