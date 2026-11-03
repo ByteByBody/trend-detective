@@ -539,8 +539,50 @@
     }
   }
 
+  function initChartResize() {
+    const chart = el("chart");
+    const grip = el("chart-grip");
+    if (!chart || !grip) return;
+
+    const stored = Number(localStorage.getItem("td.chartHeight"));
+    if (stored > 0) chart.style.height = `${stored}px`;
+
+    const apply = (height) => {
+      const h = Math.max(180, Math.round(height));
+      chart.style.height = `${h}px`;
+      if (typeof Plotly !== "undefined" && Plotly.Plots) Plotly.Plots.resize(chart);
+      localStorage.setItem("td.chartHeight", String(h));
+    };
+
+    let startY = 0;
+    let startH = 0;
+    const onMove = (e) => apply(startH + (e.clientY - startY));
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    grip.addEventListener("pointerdown", (e) => {
+      startY = e.clientY;
+      startH = chart.getBoundingClientRect().height;
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+    });
+    // The same control from the keyboard.
+    grip.addEventListener("keydown", (e) => {
+      if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+      e.preventDefault();
+      const cur = chart.getBoundingClientRect().height;
+      apply(cur + (e.key === "ArrowDown" ? 24 : -24));
+    });
+
+    window.addEventListener("resize", () => {
+      if (typeof Plotly !== "undefined" && Plotly.Plots) Plotly.Plots.resize(chart);
+    });
+  }
+
   function init() {
     state.maps.naive = makeMap("map-naive");
+    initChartResize();
     state.maps.corrected = makeMap("map-corrected");
     ["naive", "corrected"].forEach((key) => {
       const map = state.maps[key];

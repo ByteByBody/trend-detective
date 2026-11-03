@@ -258,3 +258,11 @@ def test_chart_titles_its_axis_with_units_and_draws_the_trend():
     assert "yaxis" in js and "title" in js
     assert "trendMonthly" in js  # the fitted line is drawn
     assert "toExponential" not in js
+
+
+def test_the_chart_can_be_resized_and_the_height_persists():
+    html = client.get("/").text
+    assert "chart-grip" in html
+    js = client.get("/static/app.js").text
+    assert "td.chartHeight" in js
+    assert "Plots.resize" in js

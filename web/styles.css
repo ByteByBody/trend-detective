@@ -340,10 +340,27 @@ main { padding: 0 var(--gutter); }
   color: var(--ink-soft);
 }
 .chart {
-  min-height: 300px;
+  height: 320px;
   background: #fff;
   border: 1px solid var(--line);
   border-radius: var(--radius);
+}
+.chart-grip {
+  position: relative;
+  height: 14px;
+  margin-top: 0.3rem;
+  cursor: ns-resize;
+}
+.chart-grip::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 42px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--rule);
 }
 
 /* ---- foot ---- */
