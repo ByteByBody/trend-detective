@@ -315,7 +315,7 @@ def test_load_opens_the_local_file_not_the_url():
 
 def test_load_rejects_a_variable_psl_does_not_carry():
     with pytest.raises(KeyError):
-        _source().load("snow_water_equivalent")
+        _source().load("not_a_catalog_variable")
 
 
 def test_psl_source_advertises_exactly_its_mapped_variables():
@@ -343,3 +343,22 @@ def test_missing_reader_engine_gives_an_actionable_error(monkeypatch):
         psl.open_dataset(Path("/cache/air.nc"))
 
     assert "pip install" in str(excinfo.value)
+
+
+def test_psl_serves_every_catalog_variable():
+    assert sorted(psl.PslSource().variables()) == [
+        "evapotranspiration",
+        "precipitation",
+        "snow_water_equivalent",
+        "soil_moisture_rootzone",
+        "surface_temperature",
+    ]
+
+
+def test_datasets_rows_point_at_the_probed_files():
+    assert psl.DATASETS["precipitation"][0].endswith("prate.sfc.mon.mean.nc")
+    assert psl.DATASETS["soil_moisture_rootzone"][0].endswith(
+        "soilw.10-200cm.mon.mean.nc"
+    )
+    assert psl.DATASETS["evapotranspiration"][0].endswith("lhtfl.sfc.mon.mean.nc")
+    assert psl.DATASETS["snow_water_equivalent"][0].endswith("weasd.sfc.mon.mean.nc")

@@ -42,10 +42,28 @@ PSL_BASE = "https://psl.noaa.gov/thredds"
 NCSS_BASE = f"{PSL_BASE}/ncss/grid"
 
 #: Catalog variable -> (path under the THREDDS root, variable name in the file).
+#: Two live in ``surface_gauss`` (where precipitation, snow, soil moisture and
+#: latent heat live); temperature is in ``surface``.
 DATASETS: dict[str, tuple[str, str]] = {
     "surface_temperature": (
         "Datasets/ncep.reanalysis.derived/surface/air.mon.mean.nc",
         "air",
+    ),
+    "precipitation": (
+        "Datasets/ncep.reanalysis.derived/surface_gauss/prate.sfc.mon.mean.nc",
+        "prate",
+    ),
+    "snow_water_equivalent": (
+        "Datasets/ncep.reanalysis.derived/surface_gauss/weasd.sfc.mon.mean.nc",
+        "weasd",
+    ),
+    "soil_moisture_rootzone": (
+        "Datasets/ncep.reanalysis.derived/surface_gauss/soilw.10-200cm.mon.mean.nc",
+        "soilw",
+    ),
+    "evapotranspiration": (
+        "Datasets/ncep.reanalysis.derived/surface_gauss/lhtfl.sfc.mon.mean.nc",
+        "lhtfl",
     ),
 }
 

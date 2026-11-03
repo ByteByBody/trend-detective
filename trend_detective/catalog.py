@@ -21,7 +21,7 @@ VARIABLES: dict[str, Variable] = {
         units="kg m-2",
         source="GLDAS",
         description=(
-            "Water content in the top ~1 m of soil. Drops during drought, "
+            "Water content of the 10-200 cm soil layer. Drops during drought, "
             "recovers with rain; a slow decline signals drying."
         ),
     ),
@@ -44,7 +44,10 @@ VARIABLES: dict[str, Variable] = {
         label="Evapotranspiration",
         units="mm day-1",
         source="GLDAS",
-        description="Water leaving the land surface as vapor; rises with heating.",
+        description=(
+            "Surface latent heat flux, expressed as mm/day of water. Rises "
+            "with heating; unlike a land-only product it includes the ocean."
+        ),
     ),
     "snow_water_equivalent": Variable(
         key="snow_water_equivalent",
