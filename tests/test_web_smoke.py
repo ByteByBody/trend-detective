@@ -321,3 +321,15 @@ def test_the_masthead_carries_a_warming_stripe_band_with_a_fallback():
 def test_the_square_map_rule_survives_the_restyle():
     css = client.get("/static/styles.css").text
     assert "aspect-ratio: 1 / 1" in css
+
+
+def test_fingerprint_mode_outlines_matched_regions_and_polls_progress():
+    js = client.get("/static/app.js").text
+    assert "fingerprint" in js.lower()
+    assert "region_rings" in js or "rings" in js
+    assert "progress" in js
+
+
+def test_fingerprint_mode_clicks_snap_to_a_region_centroid():
+    js = client.get("/static/app.js").text
+    assert "nearestRegion" in js

@@ -46,6 +46,8 @@
     initial: null,
     // Position in the p-sorted contested-cell walk (see the arrow keys).
     stepIndex: -1,
+    // Fingerprint mode: off by default, one poll timer, last response.
+    fingerprint: { on: false, data: null, timer: null },
   };
 
   const el = (id) => document.getElementById(id);
@@ -356,6 +358,206 @@
     });
   }
 
+  // --- fingerprints ----------------------------------------------------------
+
+  function fingerprintStatus(text) {
+    const node = el("fingerprint-status");
+    if (node) node.textContent = text;
+  }
+
+  function clearFingerprintLayers() {
+    ["naive", "corrected"].forEach((key) => {
+      const group = state.overlays["fingerprint-" + key];
+      const map = state.maps[key];
+      if (group && map) map.removeLayer(group);
+      state.overlays["fingerprint-" + key] = null;
+    });
+  }
+
+  function nearestRegion(lat, lon) {
+    // Snap a click to the region centre, so a fingerprint request always lands
+    // on a patch rather than on whatever pixel the cursor happened to hit.
+    const data = state.fingerprint.data;
+    if (!data || !Array.isArray(data.regions) || !data.regions.length) return null;
+    let best = null;
+    let bestD = Infinity;
+    data.regions.forEach((region) => {
+      const dLat = region.lat - lat;
+      const dLon = ((region.lon - lon + 540) % 360) - 180;
+      const d = dLat * dLat + dLon * dLon;
+      if (d < bestD) {
+        bestD = d;
+        best = region;
+      }
+    });
+    return best;
+  }
+
+  function renderFingerprintList(matches) {
+    const list = el("fingerprint-list");
+    if (!list) return;
+    list.innerHTML = "";
+    matches.forEach((match, idx) => {
+      const li = document.createElement("li");
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "fingerprint__item";
+      const where =
+        `${fmt(match.lat, "°", { decimals: 1 })}, ` +
+        `${fmt(match.lon, "°", { decimals: 1 })}`;
+      const distance =
+        match.distance === undefined
+          ? ""
+          : ` · distance ${fmt(match.distance, "", { decimals: 2 })}`;
+      b.textContent = `${idx + 1}. ${where}${distance}`;
+      b.addEventListener("click", () => {
+        loadSeries(match.lat, match.lon);
+        ["naive", "corrected"].forEach((key) => {
+          const map = state.maps[key];
+          if (map) map.flyTo([match.lat, match.lon], Math.max(map.getZoom(), 3));
+        });
+      });
+      li.appendChild(b);
+      list.appendChild(li);
+    });
+  }
+
+  function drawFingerprint(body) {
+    clearFingerprintLayers();
+    const reference = body.reference;
+    const matches = body.matches || [];
+
+    if (!reference && !matches.length) {
+      renderFingerprintList([]);
+      fingerprintStatus(
+        "No corrected regions to compare for this variable. Try another " +
+          "variable or a different cell."
+      );
+      return;
+    }
+
+    ["naive", "corrected"].forEach((key) => {
+      const map = state.maps[key];
+      if (!map) return;
+      const group = L.layerGroup();
+
+      const drawRegion = (region, style, tooltip) => {
+        (region.rings || []).forEach((ring) => {
+          if (ring.length < 3) return;
+          L.polygon(ring, style).bindTooltip(tooltip, { sticky: true }).addTo(group);
+        });
+        const label = L.marker([region.lat, region.lon], {
+          icon: L.divIcon({
+            className: "fp-label",
+            html: style.label,
+            iconSize: [18, 18],
+          }),
+          keyboard: false,
+        });
+        label.bindTooltip(tooltip, { direction: "top" });
+        label.addTo(group);
+      };
+
+      if (reference) {
+        drawRegion(
+          reference,
+          { color: "#1B3A6B", weight: 3, dashArray: "5 3", fill: false, label: "R" },
+          "Reference region"
+        );
+      }
+      matches.forEach((match, idx) => {
+        const vector = Object.entries(match.vector || {})
+          .filter(([, v]) => v !== null && v !== undefined)
+          .map(([name, v]) => `${name} ${fmt(v, "", { decimals: 3 })}`)
+          .join(" · ");
+        drawRegion(
+          match,
+          { color: "#0C7A66", weight: 2, fill: false, label: String(idx + 1) },
+          `Match ${idx + 1}${vector ? " · " + vector : ""}`
+        );
+      });
+
+      group.addTo(map);
+      state.overlays["fingerprint-" + key] = group;
+    });
+
+    const where = reference
+      ? `${fmt(reference.lat, "°", { decimals: 1 })}, ` +
+        `${fmt(reference.lon, "°", { decimals: 1 })}`
+      : "the selected cell";
+    const kept = (body.kept || []).join(", ");
+    fingerprintStatus(
+      `${fmt(matches.length, matches.length === 1 ? "region" : "regions")} ` +
+        `resemble ${where}.` +
+        (kept ? ` Driving variables: ${kept}.` : "")
+    );
+    renderFingerprintList(matches);
+  }
+
+  async function requestFingerprint(lat, lon) {
+    if (!state.fingerprint.on || !state.variable) return;
+    clearTimeout(state.fingerprint.timer);
+    state.fingerprint.timer = null;
+    fingerprintStatus("Preparing fingerprints...");
+    try {
+      const r = await fetch(
+        `/fingerprint/${state.variable}?lat=${lat}&lon=${lon}&k=5`
+      );
+      if (!r.ok) throw new Error(`request failed (${r.status})`);
+      const body = await r.json();
+      state.fingerprint.data = body;
+
+      if (body.status === "preparing") {
+        const done = body.progress ? body.progress.done : 0;
+        const total = body.progress ? body.progress.total : 0;
+        fingerprintStatus(
+          `Preparing fingerprints: ${fmt(done, "")} of ` +
+            `${fmt(total, "variables")} analysed. The first run downloads the rest.`
+        );
+        state.fingerprint.timer = setTimeout(
+          () => requestFingerprint(lat, lon),
+          2500
+        );
+        return;
+      }
+      if (body.status === "unavailable") {
+        clearFingerprintLayers();
+        renderFingerprintList([]);
+        fingerprintStatus(
+          body.reason || "Fingerprints are unavailable for this source."
+        );
+        return;
+      }
+      drawFingerprint(body);
+    } catch (err) {
+      fingerprintStatus(`Could not prepare fingerprints: ${err.message}.`);
+    }
+  }
+
+  function initFingerprint() {
+    const button = el("fingerprint-toggle");
+    if (!button) return;
+    button.addEventListener("click", () => {
+      state.fingerprint.on = !state.fingerprint.on;
+      button.setAttribute("aria-pressed", String(state.fingerprint.on));
+      button.textContent = state.fingerprint.on
+        ? "Hide matches"
+        : "Find matching regions";
+      if (!state.fingerprint.on) {
+        clearTimeout(state.fingerprint.timer);
+        state.fingerprint.timer = null;
+        clearFingerprintLayers();
+        state.fingerprint.data = null;
+        renderFingerprintList([]);
+        fingerprintStatus(
+          "Off. Chart a cell, then find the regions whose trends resemble it."
+        );
+        return;
+      }
+      if (state.selected) requestFingerprint(state.selected.lat, state.selected.lon);
+    });
+  }
+
   // --- stripes --------------------------------------------------------------
 
   function hexMix(a, b, t) {
@@ -572,6 +774,8 @@
     el("series-hint").textContent =
       `Cell ${cell.lat.toFixed(1)}°, ${cell.lon.toFixed(1)}°`;
 
+    if (state.fingerprint.on) requestFingerprint(cell.lat, cell.lon);
+
     try {
       const r = await fetch(
         `/timeseries/${state.variable}?lat=${cell.lat}&lon=${cell.lon}`
@@ -693,6 +897,9 @@
   function selectVariable(key, button) {
     state.variable = key;
     state.stepIndex = -1;
+    clearFingerprintLayers();
+    state.fingerprint.data = null;
+    renderFingerprintList([]);
     document.querySelectorAll(".seg").forEach((b) => b.setAttribute("aria-checked", "false"));
     if (button) button.setAttribute("aria-checked", "true");
     const v = state.catalogByKey[key];
@@ -816,10 +1023,19 @@
     state.initial = readUrl();
     state.maps.naive = makeMap("map-naive");
     initChartResize();
+    initFingerprint();
     state.maps.corrected = makeMap("map-corrected");
     ["naive", "corrected"].forEach((key) => {
       const map = state.maps[key];
       map.on("click", (e) => {
+        // In fingerprint mode the unit of interest is the patch, not the pixel.
+        if (state.fingerprint.on) {
+          const region = nearestRegion(e.latlng.lat, e.latlng.lng);
+          if (region) {
+            loadSeries(region.lat, region.lon);
+            return;
+          }
+        }
         const dot = nearestDot(key, e.latlng);
         if (dot) {
           loadSeries(dot.lat, dot.lon);

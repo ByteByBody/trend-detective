@@ -322,3 +322,4 @@ def test_fingerprint_ready_payload_lists_reference_and_matches(monkeypatch):
     assert body["reference"]["region_id"] == 1
     assert body["matches"][0]["region_id"] == 2
     assert body["matches"][0]["rings"]  # an outline travels with the match
+    assert {r["region_id"] for r in body["regions"]} == {1, 2}

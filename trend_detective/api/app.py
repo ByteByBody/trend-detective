@@ -362,7 +362,20 @@ def _fingerprint_payload(state: dict, lat: float, lon: float, k: int) -> dict:
         describe(hit_row, distance)
         for hit_row, distance in fingerprint.nearest(z, row, k)
     ]
-    return {"reference": reference, "matches": matches, "kept": kept}
+    regions = [
+        {
+            "region_id": region_id,
+            "lat": round(centroid[0], 4),
+            "lon": round(centroid[1], 4),
+        }
+        for region_id, centroid in centroids.items()
+    ]
+    return {
+        "reference": reference,
+        "matches": matches,
+        "kept": kept,
+        "regions": regions,
+    }
 
 
 @app.get("/fingerprint/{variable}")

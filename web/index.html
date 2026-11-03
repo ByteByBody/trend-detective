@@ -88,6 +88,18 @@
       </article>
     </section>
 
+    <section class="fingerprint" aria-labelledby="fp-title">
+      <header class="fingerprint__head">
+        <h2 class="section-title fingerprint__title" id="fp-title">Trend fingerprint</h2>
+        <button type="button" class="seg fingerprint__toggle" id="fingerprint-toggle"
+                aria-pressed="false">Find matching regions</button>
+      </header>
+      <p class="fingerprint__status" id="fingerprint-status" role="status" aria-live="polite">
+        Off. Chart a cell, then find the regions whose trends resemble it.
+      </p>
+      <ul class="fingerprint__list" id="fingerprint-list"></ul>
+    </section>
+
     <section class="detail">
       <article class="evidence">
         <h2 class="section-title">What changed</h2>
