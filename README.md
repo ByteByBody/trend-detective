@@ -27,26 +27,49 @@ test rejects, while keeping every injected real patch.
 
 ## Real data
 
-`DATA_SOURCE` selects the source the API serves from, and **ships as `"power"`**:
-`PowerRegionalSource` (`trend_detective/data/power.py`) pulls live MERRA-2 monthly
-means from NASA's POWER regional endpoint with no API key. Set it to `"synthetic"`
-for the instant offline demo (bundled grid with known ground truth).
+Two live sources, neither needing an API key. `DATA_SOURCE` in
+`trend_detective/config.py` picks one:
+
+| source | coverage | fetch |
+| --- | --- | --- |
+| `psl` | **whole world**, 2.5°, monthly from 1948 | one subset request, then cached |
+| `power` | one 10°×10° box (endpoint limit) | one request per tile |
+| `synthetic` | whole world, fabricated with known truth | none, instant |
+
+`psl` reads NOAA's PSL/THREDDS reanalysis (NOAA, not NASA) through its NetCDF
+Subset Service, and ships decimated to a 5° lattice over 1980–2024: 37×72 pixels,
+43 s of analysis once warm (0.9 s to load), versus ~140 s at full 2.5°. Tune with
+`PSL_START`, `PSL_END`, `PSL_STRIDE` (and `PSL_CHUNK_YEARS`, the years per
+request; the server cuts off very long ones).
 
 ```python
-DATA_SOURCE = "power"          # or "synthetic" for the offline demo
-POWER_BBOX = (60.0, 70.0, -50.0, -40.0)   # lat_min, lat_max, lon_min, lon_max
+DATA_SOURCE = "psl"
+PSL_START, PSL_END, PSL_STRIDE = 1980, 2024, 2   # stride 1 = 2.5 deg, ~140 s
+```
+
+```python
+DATA_SOURCE = "power"                             # NASA MERRA-2, regional only
+POWER_BBOX = (60.0, 70.0, -50.0, -40.0)           # lat_min, lat_max, lon_min, lon_max
 POWER_START, POWER_END = 1990, 2024
 ```
 
-The first request per variable fetches from POWER (roughly 11 s warm, up to ~90 s
-cold) and is cached; the page then reloads instantly.
+POWER's regional endpoint is capped at **10°×10° per request**, so it cannot cover
+a world map: the shipped default is a Greenland box. `power` maps
+`surface_temperature` → `T2M` and `precipitation` → `PRECTOTCORR`; `psl` maps
+`surface_temperature` → the NCEP air-temperature grid. `/catalog` lists only what
+the active source serves, so the UI never offers a variable that would fail, and
+reports the source that actually produced it (`psl` says NOAA, not MERRA-2).
 
-The endpoint caps a request at 10° per axis and one parameter, so the client tiles
-large boxes and stitches the responses. Only variables whose POWER units match the
-catalog are mapped (`surface_temperature` → `T2M`, `precipitation` → `PRECTOTCORR`).
-`/catalog` lists just those, so the UI never offers a variable the source cannot
-produce, and asking for one anyway is a 404 rather than a 500. Details and measured
-runs: `docs/algorithms.md` section 9.
+**PSL downloads once.** The subset is written to
+`data/cache/<var>.<years>.s<stride>.nc` (gitignored), five years per request.
+Every later run opens the local file, so the wait is one-time and a rerun resumes
+from the chunks already on disk. The download is atomic and validated against the
+declared length, the NetCDF magic bytes, and the reader itself: a truncated
+transfer or an HTML error page is discarded instead of cached. NCSS returns classic
+NetCDF3, which `scipy` reads — so the source needs **no extra dependency**, not
+even an HDF5 reader.
+
+Delete `data/cache/` to force a fresh download.
 
 ## Scope (this build)
 
@@ -62,8 +85,17 @@ when `statsmodels` is installed.
 python -m pytest -q
 ```
 
+Warm the cache before a demo (first run only — this is the one-time download):
+
+```bash
+python -c "from trend_detective.data import base; base.get_source('psl').load('surface_temperature')"
+```
+
 Run the web app (serves the maps at `/`):
 
 ```bash
 python -m uvicorn trend_detective.api.app:app --reload
 ```
+
+`GET /health` returns `{"status": "ok"}` without touching the data source, so a
+probe never fails just because a cold fetch is in progress.

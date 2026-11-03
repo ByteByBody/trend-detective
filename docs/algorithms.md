@@ -235,21 +235,36 @@ count.
 
 - `GET /catalog` → list of `{key,label,units,source,description}` from
   `catalog.VARIABLES`, **filtered to the variables the active source serves**, so
-  the UI can never offer a variable the source cannot produce.
+  the UI can never offer a variable the source cannot produce. `source` is
+  `base.provenance(source, variable)`: what actually produced the data, not the
+  catalog's nominal product. A source that can say declares
+  `provenance(variable) -> str`; the rest fall back to `Variable.source`. Without
+  this, PSL air temperature is served under the catalog's `MERRA-2`/`GLDAS` label.
 - `GET /demo/{variable}` → `CryWolfResult` as JSON: `lat`, `lon`, `naive_mask` (0/1),
-  `corrected_mask` (0/1), `slope`, plus `threshold`, `n_naive`, `n_corrected`,
-  `n_insufficient`, `morans_i`, `valid_fraction`. Unknown variable, or one the
-  source cannot serve → `HTTPException(404)` with the available keys in `detail`.
-  NaN slopes become `null` (JSON has no NaN).
-- `GET /timeseries/{variable}?lat=&lon=` → nearest-cell `{time, value}`; non-finite
-  coordinates → 422; unknown or unserved variable → 404.
-- `GET /` → `web/index.html`; static assets under `/static`.
+  `corrected_mask` (0/1), `slope`, plus `units`, `source` (same provenance),
+  `threshold`, `n_naive`, `n_corrected`, `n_insufficient`, `morans_i`,
+  `valid_fraction`. Unknown variable, or one the source cannot serve →
+  `HTTPException(404)` with the available keys in `detail`. NaN slopes become
+  `null` (JSON has no NaN).
+- `GET /timeseries/{variable}?lat=&lon=` → nearest-cell `{time, value}` plus
+  `time_kind` and `time_labels`; non-finite coordinates → 422; unknown or unserved
+  variable → 404. `time_kind` is `"calendar"` when the source carries real months
+  (POWER and PSL both emit `YYYYMM`) and `"index"` otherwise; `time_labels` renders
+  those as ISO dates or plain month numbers, because a `YYYYMM` integer plotted as
+  a number reads as `202.05k` on a chart axis.
+- `GET /health` → `{"status": "ok"}`. Deliberately does **not** touch the data
+  source: a cold PSL load takes seconds, and a probe that waits on it reports a
+  healthy app as down.
+- `GET /` → `web/index.html`; static assets under `/static`, including
+  `favicon.svg`, which `index.html` declares as `<link rel="icon">` so browsers do
+  not probe `/favicon.ico` and log a 404.
 
 **Pluggable data layer:** the API reads through `data.base.DatasetSource`
-(`load(variable) -> DataArray`). Sources registered by name: `power`
-(`PowerRegionalSource`, live NASA MERRA-2 — see section 9) and `synthetic`
+(`load(variable) -> DataArray`). Sources registered by name: `psl`
+(`PslSource`, global NOAA reanalysis — section 10), `power`
+(`PowerRegionalSource`, live NASA MERRA-2 — section 9), and `synthetic`
 (`SyntheticSource`, the bundled known-truth grid). `config.DATA_SOURCE` selects
-one and ships as `"power"`. A source that carries only a subset also implements
+one and ships as `"psl"`, the only source that can fill a world map. A source that carries only a subset also implements
 `variables() -> list[str]`; `base.available_variables(source)` falls back to the
 whole catalog for sources that do not, and the API uses it for both the catalog
 listing and the 404 guard. The deferred `data.fetch.EarthdataSource` still raises
@@ -313,7 +328,88 @@ Precipitation over the same box is the empty case: naive 1, corrected 0, so
 
 ---
 
-## 10. Implementation notes / pitfalls
+## 10. Global NOAA PSL source — `data/psl.py`
+
+**Signature:** `PslSource(start=None, end=None, stride=None, chunk=None, fetcher=None, opener=None).load(variable)`
+with `ncss_url(path, name, start, end, stride)`, `cache_name(path, start, end, stride)`,
+`_spans(start, end, years)` and `extract_grid(dataset, name, start, end, stride)` as
+pure helpers.
+
+`psl.noaa.gov/thredds` runs the NetCDF Subset Service (NCSS) over NCEP–NCAR
+reanalysis. One GET returns just the requested variable and date range. That is
+what makes a world map practical — NASA POWER caps a request at 10°×10°, PSL does
+not.
+
+```
+url  = NCSS_BASE + path + var, time_start, time_end, accept=netcdf3 [, horizStride]
+file = cache.fetch(url, name=cache_name(...))   # download once, then local
+ds   = opener(file)                              # scipy reads NetCDF3
+da   = extract_grid(ds, name, start, end)        # stride already applied server-side
+
+extract_grid:
+  keep years in [start, end]                     # datetime64 -> year
+  isel(lat=::stride, lon=::stride)               # space only, never time
+  transpose("time","lat","lon")
+  sortby lat descending, lon ascending           # north-up, like every source
+  time = year*100 + month                        # YYYYMM ints, time_kind="calendar"
+```
+
+**Why NCSS and not the obvious paths.**
+
+| transport | result |
+| --- | --- |
+| raw file (`downloads.psl.noaa.gov`, 29.6 MB) | NetCDF4/HDF5; needs `h5py`/`netCDF4`, which have **no CPython 3.15 wheel** (source build fails); also throttled here: 32 KB in 84 s |
+| OPeNDAP per-request subsetting (`pydap`) | works but took >7.5 min for one global slice — and pays it again on every restart |
+| NCSS `accept=netcdf3` | one request, classic NetCDF3 (`CDF\x01`), readable by `scipy`, which is already a dependency |
+
+**Cache = one-time.** `data/cache.py` writes to `<name>.part`, checks the body
+against the response's `Content-Length`, checks the NetCDF magic number, then
+opens it with the reader before `os.replace`-ing it into place. A truncated
+transfer raises `IncompleteDownload`; an HTML error page of matching size raises
+`NotNetCDF`; a body with the right magic bytes that the reader cannot open raises
+`NotUsable`. Any failure leaves the cache untouched. A cache hit still passes the
+validator but costs **no network at all** — not even a `HEAD`. Cache names include
+the year range and stride, because NCSS puts the whole request in the query string
+and basenames would collide.
+
+**Chunking.** THREDDS cut a single 45-year request off at ~7 min and returned a
+6.2 MB body that scipy rejected (the complete slice is ~22 MB). So the range is
+requested in `PSL_CHUNK_YEARS` slices (default 5) and concatenated on the time
+axis. Each chunk is a separate cache entry, so a failure loses one chunk rather
+than the whole download, and a rerun resumes from the chunks already on disk.
+Measured: 60 months at stride 2 = 22.5 s cold, 0.65 MB, then 0.0 s from cache.
+
+A burst of chunk requests earns `429 Too Many Requests`, so `fetch` retries
+`429/500/502/503/504` and connection errors with exponential backoff
+(`20 s, 40 s, 80 s`). Any other client error fails immediately: a 404 will still
+be a 404.
+
+**Measured analysis cost** (cold, 10512-pixel 2.5° world):
+
+| span | months | stride | px | analysis |
+| --- | --- | --- | --- | --- |
+| 1990–2024 | 420 | 1 | 10512 | 77 s |
+| 1948–2026 | 938 | 1 | 10512 | 517 s |
+| 2005–2024 | 240 | 1 | 10512 | 17 s |
+| 1980–2024 | 540 | 2 | 2664 | 43 s |
+
+Hence the shipped default is stride 2 over 1980–2024: 37×72 pixels, 540 months,
+43 s of analysis from the warm cache (0.9 s to load). The first run additionally
+downloads nine 0.65 MB chunks. `PSL_STRIDE = 1` buys detail for a roughly linear
+cost in pixels.
+
+**Reader dependency:** none beyond the base install. `open_dataset` tries
+`netCDF4`, `h5netcdf`, then `scipy`, so an HDF5-capable backend is used if
+present; if none can open the file the error names `pip install scipy`.
+
+**Provenance:** NOAA, not NASA. `PslSource.provenance()` and the returned array
+both carry `source="NOAA PSL / NCEP-NCAR reanalysis"` so nothing downstream can
+present it as a NASA product — including `/catalog`, which reports what the
+source declares rather than the catalog's nominal product.
+
+---
+
+## 11. Implementation notes / pitfalls
 
 - **Ties:** if ties exist, MK's no-tie variance is slightly off; acceptable for this slice,
   noted as a limitation. BH ordering must be **stable** so equal p-values give a stable threshold.
@@ -326,3 +422,12 @@ Precipitation over the same box is the empty case: naive 1, corrected 0, so
   the slope alongside p so users don't over-read significance.
 - **Never invent data:** gaps excluded and flagged; a pixel below `min_valid` is reported as
   "insufficient record", never imputed.
+- **No HDF5 reader on Python 3.15:** `h5py` has no CPython 3.15 wheel and its source build
+  fails; `netCDF4` likewise. Anything HDF5-shaped (including PSL's raw `.nc` files) is
+  therefore unreadable here. NCSS sidesteps it by emitting NetCDF3, which `scipy` reads.
+  `sample.save_bundled`/`load_bundled` pin `engine="scipy"` for the same reason — engine
+  autodetection picks HDF5 when a backend is merely half-installed (`h5netcdf` without
+  `h5py`), which broke a bundled round-trip that used to pass.
+- **Cache correctness beats cache speed:** magic bytes do not detect truncation, and THREDDS
+  can close a connection early without changing `Content-Length`. The cache therefore runs
+  the consuming reader over the body before accepting it.

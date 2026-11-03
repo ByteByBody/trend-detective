@@ -125,7 +125,7 @@
       center: [12, 0],
       zoom: 1,
       minZoom: 1,
-      maxZoom: 6,
+      maxZoom: 12,
       worldCopyJump: false,
       attributionControl: true,
       zoomControl: true,
@@ -181,7 +181,11 @@
   function renderDemo(demo) {
     state.demo = demo;
     state.bounds = gridBounds(demo);
-    Object.values(state.maps).forEach((map) => map.setMaxBounds(state.bounds));
+    Object.values(state.maps).forEach((map) => {
+      // Fit the view to the data, but leave the world reachable: a regional
+      // source covers a box, and clamping the map to it hides everything else.
+      map.fitBounds(state.bounds, { padding: [8, 8] });
+    });
 
     const slopeImg = slopeToDataURL(demo.slope);
     drawSlopeOverlays(slopeImg.url);
@@ -280,19 +284,27 @@
       el("chart").textContent = "Chart library unavailable.";
       return;
     }
+    const calendar = body.time_kind === "calendar";
     const trace = {
-      x: body.time,
+      x: body.time_labels || body.time,
       y: body.value,
       mode: "lines",
       line: { color: "#0b3d91", width: 1.6 },
-      hovertemplate: "month %{x}<br>%{y:.3f}<extra></extra>",
+      hovertemplate: calendar
+        ? "%{x|%b %Y}<br>%{y:.3f}<extra></extra>"
+        : "month %{x}<br>%{y:.3f}<extra></extra>",
     };
     const layout = {
       margin: { l: 46, r: 12, t: 10, b: 36 },
       paper_bgcolor: "rgba(0,0,0,0)",
       plot_bgcolor: "rgba(0,0,0,0)",
       font: { family: "Space Grotesk, system-ui, sans-serif", size: 11, color: "#131a2a" },
-      xaxis: { title: { text: "month" }, gridcolor: "#e4e8ee", zeroline: false },
+      xaxis: {
+        title: { text: calendar ? "date" : "month index" },
+        type: calendar ? "date" : "-",
+        gridcolor: "#e4e8ee",
+        zeroline: false,
+      },
       yaxis: { title: { text: "value" }, gridcolor: "#e4e8ee", zeroline: false },
     };
     Plotly.react("chart", [trace], layout, { displayModeBar: false, responsive: true });
@@ -305,7 +317,9 @@
     document.querySelectorAll(".seg").forEach((b) => b.setAttribute("aria-checked", "false"));
     if (button) button.setAttribute("aria-checked", "true");
     const v = state.catalogByKey[key];
-    el("variable-note").textContent = v ? `${v.label} — ${v.description}` : "";
+    el("variable-note").textContent = v
+      ? `${v.label} — ${v.description} · Source: ${v.source}`
+      : "";
     loadDemo(key);
   }
 

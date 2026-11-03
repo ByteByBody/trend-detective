@@ -15,7 +15,7 @@ from typing import Protocol
 import xarray as xr
 
 from trend_detective import catalog, config
-from trend_detective.data import power, sample
+from trend_detective.data import power, psl, sample
 
 
 class DatasetSource(Protocol):
@@ -60,10 +60,15 @@ class SyntheticSource:
         """The generator can fabricate every variable in the catalog."""
         return list(catalog.VARIABLES)
 
+    def provenance(self, variable: str) -> str:
+        """Say plainly that these numbers are fabricated, not satellite data."""
+        return f"Synthetic ({self.ny}x{self.nx} generated grid, known truth)"
+
 
 _SOURCES: dict[str, type] = {
     "synthetic": SyntheticSource,
     "power": power.PowerRegionalSource,
+    "psl": psl.PslSource,
 }
 
 
@@ -86,3 +91,17 @@ def get_source(name: str) -> DatasetSource:
     except KeyError:
         raise KeyError(f"unknown data source: {name!r}; known: {sorted(_SOURCES)}")
     return factory()
+
+
+def provenance(source: DatasetSource, variable: str) -> str:
+    """What actually produced ``variable`` under ``source``.
+
+    The catalog records the product we would *ideally* use (GLDAS, GPM), which
+    is wrong as soon as a stand-in source serves the variable. A source that
+    knows better declares ``provenance(variable)``; the rest keep the catalog's
+    nominal product.
+    """
+    declared = getattr(source, "provenance", None)
+    if callable(declared):
+        return str(declared(variable))
+    return catalog.get_variable(variable).source

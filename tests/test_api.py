@@ -57,6 +57,38 @@ def precip_only_source(monkeypatch):
     app_module._demo_body.cache_clear()
 
 
+class _CalendarSource:
+    """A source on a real calendar axis, like the live POWER source."""
+
+    def variables(self) -> list[str]:
+        return ["surface_temperature"]
+
+    def load(self, variable: str) -> xr.DataArray:
+        months = np.arange(24)
+        stamps = 202001 + (months // 12) * 100 + (months % 12)
+        return xr.DataArray(
+            np.zeros((24, 3, 3), dtype=float),
+            dims=("time", "lat", "lon"),
+            coords={
+                "time": stamps,
+                "lat": np.linspace(1.0, -1.0, 3),
+                "lon": np.linspace(-1.0, 1.0, 3),
+            },
+            name="value",
+            attrs={"variable": variable, "time_kind": "calendar"},
+        )
+
+
+@pytest.fixture
+def calendar_source(monkeypatch):
+    monkeypatch.setattr(app_module, "_SOURCE", _CalendarSource())
+    app_module._demo_grid.cache_clear()
+    app_module._demo_body.cache_clear()
+    yield
+    app_module._demo_grid.cache_clear()
+    app_module._demo_body.cache_clear()
+
+
 def test_catalog_endpoint():
     r = client.get("/catalog")
     assert r.status_code == 200 and isinstance(r.json(), list) and r.json()
@@ -98,6 +130,61 @@ def test_demo_endpoint_shape():
     assert len(body["naive_mask"][0]) == len(body["lon"])
 
 
+def test_catalog_reports_the_active_source_not_the_nominal_product(monkeypatch):
+    # The catalog names the product we would ideally use (GLDAS etc.). Serving
+    # a different source under that label is false attribution.
+    class GreenSource:
+        def variables(self):
+            return ["surface_temperature"]
+
+        def provenance(self, variable):
+            return "GREEN-1 sample"
+
+        def load(self, variable):
+            return _FlatSource().load(variable)
+
+    monkeypatch.setattr(app_module, "_SOURCE", GreenSource())
+    app_module._demo_grid.cache_clear()
+    app_module._demo_body.cache_clear()
+
+    try:
+        entry = client.get("/catalog").json()[0]
+    finally:
+        app_module._demo_grid.cache_clear()
+        app_module._demo_body.cache_clear()
+
+    assert entry["source"] == "GREEN-1 sample"
+
+
+def test_catalog_falls_back_to_the_nominal_product_when_undeclared(monkeypatch):
+    # A source that says nothing about provenance keeps the catalog's nominal
+    # product rather than reporting an empty string.
+    class Bare:
+        def variables(self):
+            return ["precipitation"]
+
+        def load(self, variable):
+            return _FlatSource().load(variable)
+
+    monkeypatch.setattr(app_module, "_SOURCE", Bare())
+    app_module._demo_grid.cache_clear()
+    app_module._demo_body.cache_clear()
+
+    try:
+        entry = client.get("/catalog").json()[0]
+    finally:
+        app_module._demo_grid.cache_clear()
+        app_module._demo_body.cache_clear()
+
+    assert entry["source"] == "GPM / MERRA-2"
+
+
+def test_demo_reports_the_source_that_produced_the_numbers():
+    body = client.get("/demo/surface_temperature").json()
+
+    assert "synthetic" in body["source"].lower()
+
+
 def test_demo_unknown_variable_404():
     assert client.get("/demo/nope").status_code == 404
 
@@ -117,6 +204,23 @@ def test_timeseries_endpoint():
 
 def test_timeseries_unknown_variable_404():
     assert client.get("/timeseries/nope?lat=0&lon=0").status_code == 404
+
+
+def test_timeseries_labels_a_calendar_axis_with_dates(calendar_source):
+    # YYYYMM integers plotted as numbers render as "202.05k" on a chart axis.
+    body = client.get("/timeseries/surface_temperature?lat=0&lon=0").json()
+
+    assert body["time_kind"] == "calendar"
+    assert body["time_labels"][:3] == ["2020-01-01", "2020-02-01", "2020-03-01"]
+    assert body["time_labels"][-1] == "2021-12-01"
+
+
+def test_timeseries_labels_an_index_axis_as_month_numbers():
+    body = client.get("/timeseries/soil_moisture_rootzone?lat=0&lon=0").json()
+
+    assert body["time_kind"] == "index"
+    assert body["time_labels"][:3] == ["0", "1", "2"]
+    assert len(body["time_labels"]) == len(body["time"])
 
 
 def test_index_served():

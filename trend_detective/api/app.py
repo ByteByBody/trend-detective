@@ -38,6 +38,11 @@ def _served_variables() -> list[str]:
     return data_source.available_variables(_SOURCE)
 
 
+def _provenance(variable: str) -> str:
+    """The source that actually produced ``variable``, not the nominal product."""
+    return data_source.provenance(_SOURCE, variable)
+
+
 def _require_served(variable: str) -> None:
     """404 unless ``variable`` is known *and* the active source can serve it."""
     try:
@@ -54,6 +59,24 @@ def _require_served(variable: str) -> None:
                 f"available: {served}"
             ),
         )
+
+
+def _time_kind(da) -> str:
+    """Whether the time axis carries calendar months or a plain month index."""
+    return "calendar" if da.attrs.get("time_kind") == "calendar" else "index"
+
+
+def _time_labels(da) -> list[str]:
+    """Display labels for the time axis.
+
+    POWER's ``YYYYMM`` integers are meaningless as numbers on a chart axis
+    (``202005`` renders as "202.05k"), so calendar axes become ISO dates and
+    index axes stay as plain month numbers.
+    """
+    values = da["time"].values
+    if _time_kind(da) == "calendar":
+        return [f"{int(v) // 100:04d}-{int(v) % 100:02d}-01" for v in values]
+    return [str(int(v)) for v in values]
 
 
 @lru_cache(maxsize=None)
@@ -73,6 +96,7 @@ def _demo_body(variable: str) -> dict:
     return {
         "variable": variable,
         "units": catalog.get_variable(variable).units,
+        "source": _provenance(variable),
         "lat": [float(v) for v in da["lat"].values],
         "lon": [float(v) for v in da["lon"].values],
         "threshold": float(res.threshold),
@@ -96,7 +120,7 @@ def get_catalog() -> list[dict]:
             "key": v.key,
             "label": v.label,
             "units": v.units,
-            "source": v.source,
+            "source": _provenance(key),
             "description": v.description,
         }
         for key, v in catalog.VARIABLES.items()
@@ -132,8 +156,16 @@ def get_timeseries(
         "lat": float(da["lat"].values[i]),
         "lon": float(da["lon"].values[j]),
         "time": [int(t) for t in da["time"].values],
+        "time_kind": _time_kind(da),
+        "time_labels": _time_labels(da),
         "value": [None if not np.isfinite(v) else float(v) for v in series],
     }
+
+
+@app.get("/health")
+def health() -> dict:
+    """Liveness probe: never touches the data source, so it cannot time out."""
+    return {"status": "ok"}
 
 
 @app.get("/")

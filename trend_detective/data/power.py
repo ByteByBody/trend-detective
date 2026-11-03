@@ -123,7 +123,7 @@ def parse_regional(payload: dict) -> xr.DataArray:
         dims=("time", "lat", "lon"),
         coords={"time": np.asarray(times, dtype=int), "lat": lats, "lon": lons},
         name="value",
-        attrs={"units": units, "source": SOURCE_NAME},
+        attrs={"units": units, "source": SOURCE_NAME, "time_kind": "calendar"},
     )
 
 
@@ -192,3 +192,7 @@ class PowerRegionalSource:
     def variables(self) -> list[str]:
         """Only the catalog variables that map onto a POWER parameter."""
         return list(PARAMETERS)
+
+    def provenance(self, variable: str) -> str:
+        """MERRA-2, served through NASA POWER's regional endpoint."""
+        return SOURCE_NAME
