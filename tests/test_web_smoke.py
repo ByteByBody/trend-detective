@@ -300,3 +300,24 @@ def test_the_most_contested_cells_are_listed_and_clickable():
 def test_arrow_keys_step_through_contested_cells():
     js = client.get("/static/app.js").text
     assert "ArrowRight" in js and "ArrowLeft" in js
+
+
+def test_stats_are_one_ruled_panel_not_a_card_grid():
+    css = client.get("/static/styles.css").text
+    assert "border-radius" not in css.split(".stat {")[1].split("}")[0]
+
+
+def test_the_map_windows_read_as_instrument_faces():
+    html = client.get("/").text
+    assert "map-frame" in html or "registration" in html.lower()
+
+
+def test_the_masthead_carries_a_warming_stripe_band_with_a_fallback():
+    js = client.get("/static/app.js").text
+    assert "stripe" in js.lower()
+    assert "function renderStripes(" in js
+
+
+def test_the_square_map_rule_survives_the_restyle():
+    css = client.get("/static/styles.css").text
+    assert "aspect-ratio: 1 / 1" in css

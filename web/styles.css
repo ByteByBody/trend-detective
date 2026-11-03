@@ -104,9 +104,34 @@ body {
 
 .provenance {
   margin: 0;
-  font-size: 0.8rem;
+  font-family: var(--readout);
+  font-size: 0.72rem;
   font-weight: 500;
+  letter-spacing: 0.02em;
   color: var(--brand);
+}
+
+/* The hero: one year per stripe, blue below the record mean, red above.
+   Until the first analysis lands it is a plain ruled band, never a fake chart. */
+.stripe-band {
+  display: flex;
+  height: 34px;
+  padding: 0 var(--gutter);
+  background: var(--paper);
+  border-bottom: 1px solid var(--ink);
+}
+.stripe-band__rule {
+  flex: 1;
+  align-self: center;
+  height: 1px;
+  background: var(--rule);
+}
+.stripe-band__year {
+  flex: 1 1 0;
+  min-width: 1px;
+}
+.stripe-band__year + .stripe-band__year {
+  box-shadow: inset 1px 0 0 rgba(233, 237, 242, 0.18);
 }
 
 main { padding: 0 var(--gutter); }
@@ -115,12 +140,16 @@ main { padding: 0 var(--gutter); }
 
 .controls {
   padding: 1.5rem 0 0.5rem;
+  border-bottom: 1px solid var(--rule);
 }
 
 .controls__label {
   margin: 0 0 0.5rem;
-  font-size: 0.78rem;
+  font-family: var(--readout);
+  font-size: 0.7rem;
   font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   color: var(--ink-soft);
 }
 
@@ -136,9 +165,9 @@ main { padding: 0 var(--gutter); }
   font-size: 0.9rem;
   padding: 0.5rem 0.9rem;
   color: var(--ink);
-  background: #fff;
-  border: 1.5px solid var(--line);
-  border-radius: var(--radius);
+  background: transparent;
+  border: 1px solid var(--rule);
+  border-radius: 0;
   cursor: pointer;
   transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
@@ -187,8 +216,8 @@ main { padding: 0 var(--gutter); }
 .panel {
   background: #fff;
   border: 1px solid var(--line);
-  border-top-width: 4px;
-  border-radius: var(--radius);
+  border-top-width: 3px;
+  border-radius: 0;
   overflow: hidden;
 }
 .panel--naive { border-top-color: var(--naive); }
@@ -212,6 +241,35 @@ main { padding: 0 var(--gutter); }
   font-size: 0.92rem;
   color: var(--ink-soft);
 }
+
+/* An instrument face: labelled strip, square window, corner registration. */
+.map-frame {
+  position: relative;
+  border-top: 1px solid var(--rule);
+  background: #fff;
+}
+.map-frame__label {
+  margin: 0;
+  padding: 0.3rem 1rem;
+  font-family: var(--readout);
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  border-bottom: 1px solid var(--rule);
+}
+.reg {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  pointer-events: none;
+  z-index: 500;
+}
+.reg--tl { left: 4px; top: 26px; border-left: 1px solid var(--ink); border-top: 1px solid var(--ink); }
+.reg--tr { right: 4px; top: 26px; border-right: 1px solid var(--ink); border-top: 1px solid var(--ink); }
+.reg--bl { left: 4px; bottom: 4px; border-left: 1px solid var(--ink); border-bottom: 1px solid var(--ink); }
+.reg--br { right: 4px; bottom: 4px; border-right: 1px solid var(--ink); border-bottom: 1px solid var(--ink); }
 
 .map {
   /* The grid spans the whole Mercator world, which is square: a square window
@@ -294,29 +352,32 @@ main { padding: 0 var(--gutter); }
 .stats {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.7rem;
+  gap: 1px;
   margin: 0;
+  /* One ruled panel: the 1px gap shows the rule colour, so every row and
+     column divider is a hairline, not a stack of separate cards. */
+  background: var(--rule);
+  border: 1px solid var(--rule);
 }
 @media (min-width: 560px) {
   .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
 .stat {
-  background: #fff;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 0.6rem 0.7rem;
+  background: var(--panel);
+  padding: 0.6rem 0.75rem;
 }
 .stat dt {
-  font-size: 0.74rem;
+  font-size: 0.72rem;
   color: var(--ink-soft);
-  margin-bottom: 0.2rem;
+  margin-bottom: 0.25rem;
 }
 .stat dd {
   margin: 0;
-  font-size: 1.35rem;
-  font-weight: 700;
-  letter-spacing: -0.02em;
+  font-family: var(--readout);
+  font-size: 1.02rem;
+  font-weight: 500;
+  letter-spacing: 0;
 }
 
 .legend {
@@ -325,23 +386,34 @@ main { padding: 0 var(--gutter); }
   gap: 0.7rem;
   margin-top: 1rem;
   flex-wrap: wrap;
+  padding-top: 0.7rem;
+  border-top: 1px solid var(--rule);
 }
 .legend__caption {
-  font-size: 0.78rem;
+  font-family: var(--readout);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   color: var(--ink-soft);
 }
 .legend__ramp {
   flex: 1 1 160px;
-  height: 12px;
-  border-radius: 2px;
-  border: 1px solid var(--line);
-  background: linear-gradient(90deg, #440154, #3b528b, #21918c, #5ec962, #fde725);
+  height: 14px;
+  border: 1px solid var(--rule);
+  /* Tick marks every 20% over the viridis ramp read as a calibrated scale. */
+  background-image:
+    repeating-linear-gradient(90deg, rgba(14, 21, 36, 0.45) 0 1px, transparent 1px 20%),
+    linear-gradient(90deg, #440154, #3b528b, #21918c, #5ec962, #fde725);
+  background-size: 100% 5px, 100% 100%;
+  background-position: 0 0, 0 0;
+  background-repeat: no-repeat;
 }
 .legend__ends {
   display: flex;
   justify-content: space-between;
   min-width: 8ch;
-  font-size: 0.78rem;
+  font-family: var(--readout);
+  font-size: 0.72rem;
   color: var(--ink-soft);
   gap: 1.5rem;
 }
@@ -404,7 +476,7 @@ main { padding: 0 var(--gutter); }
   height: 320px;
   background: #fff;
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: 0;
 }
 .chart-grip {
   position: relative;
@@ -422,6 +494,16 @@ main { padding: 0 var(--gutter); }
   height: 3px;
   border-radius: 2px;
   background: var(--rule);
+}
+
+/* One orchestrated reveal: the verdict and its tallies settle in together. */
+@keyframes land {
+  from { opacity: 0; transform: translateY(4px) scale(0.995); }
+  to { opacity: 1; transform: none; }
+}
+.verdict.is-in,
+.panel__tally.is-in {
+  animation: land 0.42s ease-out both;
 }
 
 /* ---- foot ---- */

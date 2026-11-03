@@ -356,6 +356,56 @@
     });
   }
 
+  // --- stripes --------------------------------------------------------------
+
+  function hexMix(a, b, t) {
+    const pa = [1, 3, 5].map((i) => parseInt(a.slice(i, i + 2), 16));
+    const pb = [1, 3, 5].map((i) => parseInt(b.slice(i, i + 2), 16));
+    const mix = pa.map((v, i) => Math.round(v + (pb[i] - v) * t));
+    return `rgb(${mix[0]}, ${mix[1]}, ${mix[2]})`;
+  }
+
+  function renderStripes(demo) {
+    // The canonical warming-stripe band, drawn from this variable's global
+    // annual anomaly: one year per stripe, blue below the record mean, red
+    // above. A plain ruled band stands in until the first analysis lands.
+    const band = el("stripe-band");
+    if (!band) return;
+    const values = (demo && demo.annual_anomaly) || [];
+    const finite = values.filter((v) => v !== null && isFinite(v));
+    band.innerHTML = "";
+
+    if (!finite.length) {
+      const rule = document.createElement("span");
+      rule.className = "stripe-band__rule";
+      band.appendChild(rule);
+      band.title = "The annual anomaly band appears with the first analysis.";
+      return;
+    }
+
+    const scale = Math.max(...finite.map((v) => Math.abs(v))) || 1;
+    const COOL_NEAR = "#C6DBEF";
+    const COOL_FAR = "#08306B";
+    const WARM_NEAR = "#FCBBA1";
+    const WARM_FAR = "#67000D";
+
+    values.forEach((v) => {
+      const cell = document.createElement("span");
+      cell.className = "stripe-band__year";
+      if (v === null || !isFinite(v)) {
+        cell.style.background = "#D5DBE3";
+      } else {
+        const t = Math.min(1, Math.abs(v) / scale);
+        cell.style.background =
+          v >= 0 ? hexMix(WARM_NEAR, WARM_FAR, t) : hexMix(COOL_NEAR, COOL_FAR, t);
+      }
+      band.appendChild(cell);
+    });
+    band.title =
+      "Global annual mean anomaly for the selected variable: oldest year at " +
+      "the left. Red is warmer than the record mean, blue cooler.";
+  }
+
   function renderDemo(demo) {
     state.demo = demo;
     state.bounds = gridBounds(demo);
@@ -414,6 +464,20 @@
     el("slope-max").textContent = perDecade(slopeImg.max);
 
     renderContested(demo);
+    renderStripes(demo);
+
+    // One orchestrated reveal when the analysis lands; nothing else animates.
+    const verdict = document.querySelector(".verdict");
+    if (verdict) {
+      verdict.classList.remove("is-in");
+      void verdict.offsetWidth;
+      verdict.classList.add("is-in");
+    }
+    document.querySelectorAll(".panel__tally").forEach((node) => {
+      node.classList.remove("is-in");
+      void node.offsetWidth;
+      node.classList.add("is-in");
+    });
 
     const source = el("data-source");
     if (source) {

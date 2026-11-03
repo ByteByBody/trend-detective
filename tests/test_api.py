@@ -147,6 +147,16 @@ def test_demo_exposes_a_per_pixel_p_value_grid_for_the_hover_readout():
     assert any(body["p_value"][i][j] is not None for i, j in contested)
 
 
+def test_demo_carries_the_annual_anomaly_for_the_stripe_band():
+    body = client.get("/demo/soil_moisture_rootzone").json()
+    anomaly = body["annual_anomaly"]
+
+    assert anomaly  # a record long enough to have years
+    finite = [v for v in anomaly if v is not None]
+    assert finite
+    assert abs(sum(finite) / len(finite)) < 1e-6  # anomalies centre on zero
+
+
 def test_catalog_reports_the_active_source_not_the_nominal_product(monkeypatch):
     # The catalog names the product we would ideally use (GLDAS etc.). Serving
     # a different source under that label is false attribution.

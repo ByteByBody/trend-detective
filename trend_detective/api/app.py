@@ -79,6 +79,33 @@ def _time_labels(da) -> list[str]:
     return [str(int(v)) for v in values]
 
 
+def _annual_anomaly(da) -> list[float]:
+    """Global annual-mean anomaly, one entry per whole year of the record.
+
+    The masthead's warming-stripe band is the canonical climate visual, so it
+    must come from the data, not from a stock image. Years are consecutive
+    12-month blocks; a trailing partial year is dropped rather than stretched.
+    Values are in the variable's catalog units and centred on zero.
+    """
+    values = np.asarray(da.values, dtype=float)
+    if values.ndim != 3 or values.shape[0] < 12:
+        return []
+
+    yearly = []
+    for y in range(values.shape[0] // 12):
+        block = values[y * 12 : (y + 1) * 12]
+        yearly.append(np.nanmean(block) if np.isfinite(block).any() else np.nan)
+
+    yearly = np.asarray(yearly, dtype=float)
+    finite = yearly[np.isfinite(yearly)]
+    if not finite.size:
+        return []
+    base = finite.mean()
+    return [
+        None if not np.isfinite(v) else round(float(v - base), 6) for v in yearly
+    ]
+
+
 @lru_cache(maxsize=None)
 def _demo_body(variable: str) -> dict:
     """Run the cry-wolf pipeline once per variable and cache the JSON body."""
@@ -111,6 +138,8 @@ def _demo_body(variable: str) -> dict:
         # Per-pixel p-values so a dot's hover readout can quote the number the
         # verdict rests on, not just the verdict.
         "p_value": _grid(res.p_value.values),
+        # One global anomaly per year, for the warming-stripe band.
+        "annual_anomaly": _annual_anomaly(da),
     }
 
 
