@@ -161,6 +161,10 @@ def extract_grid(
 
     units = da.attrs.get("units", "")
     out = da.transpose("time", "lat", "lon")
+    # PSL stores longitude 0..360; Leaflet and every other source use -180..180.
+    # Handing raw values to the map pins the raster outside the world view, and
+    # a click at -50 deg would snap to the wrong cell.
+    out = out.assign_coords(lon=((out["lon"] + 180) % 360) - 180)
     out = out.sortby("lat", ascending=False).sortby("lon", ascending=True)
     out = out.assign_coords(time=_yyyymm(out["time"].values))
     out = out.rename("value")

@@ -64,6 +64,14 @@ def test_favicon_is_served_as_svg():
     assert "<svg" in r.text
 
 
+def test_app_js_clamps_overlay_bounds_to_the_world():
+    # A source in the 0..360 convention would otherwise push the overlay outside
+    # the visible map; the raster bounds must never exceed -180..180.
+    js = client.get("/static/app.js").text
+    assert "Math.max(-180" in js
+    assert "Math.min(180" in js
+
+
 def test_app_js_shows_which_source_produced_the_data():
     # `/catalog` reports the active source's provenance; hiding it in the UI
     # would leave the NOAA data presented as generic "satellite data".

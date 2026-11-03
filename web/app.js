@@ -167,8 +167,8 @@
     const dLon = lon.length > 1 ? Math.abs(lon[1] - lon[0]) / 2 : 0;
     const minLat = Math.max(-90, Math.min(...lat) - dLat);
     const maxLat = Math.min(90, Math.max(...lat) + dLat);
-    const minLon = Math.min(...lon) - dLon;
-    const maxLon = Math.max(...lon) + dLon;
+    const minLon = Math.max(-180, Math.min(...lon) - dLon);
+    const maxLon = Math.min(180, Math.max(...lon) + dLon);
     return [[minLat, minLon], [maxLat, maxLon]];
   }
 

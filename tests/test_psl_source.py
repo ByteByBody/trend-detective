@@ -128,6 +128,58 @@ def test_extract_grid_filters_to_the_requested_years():
     assert {int(t) // 100 for t in da["time"].values} == {2001}
 
 
+def test_extract_grid_wraps_longitude_to_the_map_convention():
+    # PSL stores 0..360; Leaflet and every other source use -180..180. Serving
+    # raw values pins the raster outside the world view: bounds of [-2.5, 357.5]
+    # draw the image off the right edge instead of over the globe.
+    lon = np.array([0.0, 90.0, 180.0, 270.0])
+    ds = xr.Dataset(
+        {"air": (("time", "lat", "lon"), np.zeros((1, 2, 4)))},
+        coords={"time": np.arange("2000-01", "2000-02", dtype="datetime64[M]"),
+                "lat": np.array([90.0, -90.0]), "lon": lon},
+    )
+
+    da = psl.extract_grid(ds, "air")
+
+    assert list(da["lon"].values) == [-180.0, -90.0, 0.0, 90.0]
+    assert float(da["lon"].min()) >= -180.0
+    assert float(da["lon"].max()) < 180.0
+
+
+def test_extract_grid_keeps_a_full_global_longitude_axis():
+    da = psl.extract_grid(_dataset(), "air")
+
+    # The stand-in runs 0..315 in 8 steps; wrapping must not drop or duplicate.
+    assert da.sizes["lon"] == 8
+    assert len(set(da["lon"].values.tolist())) == 8
+    assert float(da["lon"].min()) >= -180.0
+    assert float(da["lon"].max()) < 180.0
+    assert np.all(np.diff(da["lon"].values) > 0)
+
+
+def test_extract_grid_wraps_a_real_0_360_axis_without_gaps():
+    lon = np.arange(0.0, 360.0, 5.0)
+    ds = xr.Dataset(
+        {"air": (("time", "lat", "lon"), np.zeros((1, 2, lon.size)))},
+        coords={"time": np.arange("2000-01", "2000-02", dtype="datetime64[M]"),
+                "lat": np.array([90.0, -90.0]), "lon": lon},
+    )
+
+    values = psl.extract_grid(ds, "air")["lon"].values
+
+    assert values.size == 72
+    assert np.all(np.diff(values) == 5.0)  # -180, -175, ..., 175
+    assert float(values.min()) == -180.0
+    assert float(values.max()) == 175.0
+
+
+def test_extract_grid_leaves_latitude_alone():
+    da = psl.extract_grid(_dataset(), "air")
+
+    assert float(da["lat"].max()) == 87.5
+    assert float(da["lat"].min()) == -87.5
+
+
 @pytest.mark.parametrize("stride", [2, 3])
 def test_extract_grid_coarsens_space_not_time(stride):
     full = psl.extract_grid(_dataset(), "air")
