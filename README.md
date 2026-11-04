@@ -96,6 +96,15 @@ HNSW index the original design anticipated buys nothing, so it stays deferred.
 
 ## Development
 
+Install once, editable, so `import trend_detective` resolves from any directory
+(uvicorn's `--reload` runs the app in a spawned child; without this, a shell that
+is not in the repo root fails with `ModuleNotFoundError: No module named
+'trend_detective'`):
+
+```bash
+python -m pip install -e . --no-deps
+```
+
 ```bash
 python -m pytest -q
 ```
