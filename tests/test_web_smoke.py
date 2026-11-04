@@ -340,3 +340,23 @@ def test_fingerprint_mode_outlines_matched_regions_and_polls_progress():
 def test_fingerprint_mode_clicks_snap_to_a_region_centroid():
     js = client.get("/static/app.js").text
     assert "nearestRegion" in js
+
+
+def test_the_slope_raster_is_warped_into_mercator():
+    # Equal-latitude rows are not equal on screen: on a Mercator map 60N sits
+    # far higher than its row index suggests, so the raster has to be sampled
+    # through the projection or continents drift into the sea.
+    js = client.get("/static/app.js").text
+    assert "mercatorRows" in js
+    assert "projection.js" in client.get("/").text
+    assert client.get("/static/projection.js").status_code == 200
+
+
+def test_the_slope_raster_is_not_smoothed_into_a_halo():
+    # Bilinear upscaling of a 37-row image blurred coastline colour into the
+    # ocean. Only the raster gets nearest-neighbour; satellite tiles must not.
+    js = client.get("/static/app.js").text
+    assert 'className: "slope-layer"' in js
+    css = client.get("/static/styles.css").text
+    assert "image-rendering: pixelated" in css
+    assert ".slope-layer" in css

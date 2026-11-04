@@ -508,4 +508,16 @@ kept variable names for the "driving variables" legend.
   `h5py`), which broke a bundled round-trip that used to pass.
 - **Cache correctness beats cache speed:** magic bytes do not detect truncation, and THREDDS
   can close a connection early without changing `Content-Length`. The cache therefore runs
-  the consuming reader over the body before accepting it.
+  the consuming reader over the body before accepting it. One lock per cache file serialises
+  writers: the dashboard's burst of requests for one variable would otherwise all download
+  the same chunk and race on one `.part` name (Windows `WinError 32`).
+- **Raster placement on a Mercator map:** the slope grid is evenly spaced in latitude, but
+  Web Mercator is not — screen y grows like `ln(tan(pi/4 + lat/2))`. Drawing equal-latitude
+  rows put a 60°N feature near 76°N, so continents drifted poleward and their colour spilled
+  into the sea. `web/projection.js` samples each output row at its Mercator latitude, and
+  `gridBounds` clamps to `±85.05112878`. The canvas is drawn at 256+ rows so the equatorial
+  rows do not go blocky.
+- **No smoothing on the slope raster:** bilinear upscaling of a few dozen rows blurred
+  coastline colour into the ocean as a soft glow. The overlay sets
+  `className: "slope-layer"` and `.slope-layer { image-rendering: pixelated }`. Satellite
+  tiles keep normal filtering — nearest-neighbour would make them look worse, not better.

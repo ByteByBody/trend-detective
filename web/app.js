@@ -71,7 +71,7 @@
 
   // --- image builders -------------------------------------------------------
 
-  function slopeToDataURL(slope) {
+  function slopeToDataURL(slope, lat) {
     const ny = slope.length;
     const nx = slope[0].length;
     const flat = [];
@@ -85,15 +85,23 @@
     // flatten the whole ramp, and the legend would quote that outlier.
     const { min, max } = TDFormat.slopeRange(flat);
     const span = max - min || 1;
+    // Rows are evenly spaced in latitude; the map is Mercator. Sample through
+    // the projection so every row lands where it belongs instead of drifting
+    // poleward. A taller canvas keeps the equatorial rows from going blocky.
+    const rows =
+      lat && lat.length
+        ? TDProjection.mercatorRows(lat, Math.max(ny, 256))
+        : Array.from({ length: ny }, (_, i) => i);
     const canvas = document.createElement("canvas");
     canvas.width = nx;
-    canvas.height = ny;
+    canvas.height = rows.length;
     const ctx = canvas.getContext("2d");
-    const img = ctx.createImageData(nx, ny);
-    for (let i = 0; i < ny; i++) {
+    const img = ctx.createImageData(nx, rows.length);
+    for (let h = 0; h < rows.length; h++) {
+      const src = slope[rows[h]];
       for (let j = 0; j < nx; j++) {
-        const v = slope[i][j];
-        const k = (i * nx + j) * 4;
+        const v = src[j];
+        const k = (h * nx + j) * 4;
         if (v === null || !isFinite(v)) continue;
         const [r, g, b] = viridis((v - min) / span);
         img.data[k] = r;
@@ -200,6 +208,9 @@
       state.overlays[key + "Slope"] = L.imageOverlay(shapeUrl, state.bounds, {
         opacity: SLOPE_OPACITY,
         interactive: false,
+        // Nearest-neighbour for this one layer: bilinear upscaling of the
+        // coarse raster blurred coastal colour into the ocean as a glow.
+        className: "slope-layer",
       }).addTo(map);
     });
   }
@@ -211,8 +222,8 @@
     const lon = demo.lon;
     const dLat = lat.length > 1 ? Math.abs(lat[0] - lat[1]) / 2 : 0;
     const dLon = lon.length > 1 ? Math.abs(lon[1] - lon[0]) / 2 : 0;
-    const minLat = Math.max(-90, Math.min(...lat) - dLat);
-    const maxLat = Math.min(90, Math.max(...lat) + dLat);
+    const minLat = Math.max(-TDProjection.MAX_LAT, Math.min(...lat) - dLat);
+    const maxLat = Math.min(TDProjection.MAX_LAT, Math.max(...lat) + dLat);
     const minLon = Math.max(-180, Math.min(...lon) - dLon);
     const maxLon = Math.min(180, Math.max(...lon) + dLon);
     return [[minLat, minLon], [maxLat, maxLon]];
@@ -613,7 +624,7 @@
       map.fitBounds(state.bounds, { padding: [0, 0] });
     });
 
-    const slopeImg = slopeToDataURL(demo.slope);
+    const slopeImg = slopeToDataURL(demo.slope, demo.lat);
     drawSlopeOverlays(slopeImg.url);
     // Dots mark only the contested claims, and only on the panel that makes
     // them. The corrected panel has none left to argue about.

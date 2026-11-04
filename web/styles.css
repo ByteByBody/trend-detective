@@ -294,6 +294,16 @@ main { padding: 0 var(--gutter); }
   font-size: 0.8rem;
   color: var(--ink-2);
 }
+
+/* The slope raster is a few dozen rows stretched across the panel. Bilinear
+   upscaling dragged coastal colour into the sea as a soft glow, so this layer
+   alone gets nearest-neighbour. Tiles keep their normal filtering: blocky
+   satellite imagery would look worse, not better. */
+.slope-layer {
+  image-rendering: -moz-crisp-edges;
+  image-rendering: crisp-edges;
+  image-rendering: pixelated;
+}
 .map-key__dot {
   flex: 0 0 auto;
   width: 9px;
