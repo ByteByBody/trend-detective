@@ -392,12 +392,16 @@ and flipping it would turn a physical fact into a formatting habit.
 | OPeNDAP per-request subsetting (`pydap`) | works but took >7.5 min for one global slice — and pays it again on every restart |
 | NCSS `accept=netcdf3` | one request, classic NetCDF3 (`CDF\x01`), readable by `scipy`, which is already a dependency |
 
-**Cache = one-time.** `data/cache.py` writes to `<name>.part`, checks the body
+**Cache = one-time.** `data/cache.py` writes to a per-writer part file
+(`<name>.<pid>.<thread>.part`), checks the body
 against the response's `Content-Length`, checks the NetCDF magic number, then
 opens it with the reader before `os.replace`-ing it into place. A truncated
 transfer raises `IncompleteDownload`; an HTML error page of matching size raises
 `NotNetCDF`; a body with the right magic bytes that the reader cannot open raises
-`NotUsable`. Any failure leaves the cache untouched. A cache hit still passes the
+`NotUsable`. Any failure leaves the cache untouched. One lock per cache file
+serialises writers, so the dashboard's burst of requests for one variable
+downloads each chunk once and the rest wait for it instead of racing on a shared
+filename. A cache hit still passes the
 validator but costs **no network at all** — not even a `HEAD`. Cache names include
 the year range and stride, because NCSS puts the whole request in the query string
 and basenames would collide.

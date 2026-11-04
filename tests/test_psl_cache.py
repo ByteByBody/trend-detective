@@ -1,5 +1,7 @@
 """Tests for the one-time file cache used by the NOAA PSL source."""
 
+import threading
+import time
 from pathlib import Path
 import urllib.error
 
@@ -67,6 +69,60 @@ def test_truncated_download_is_rejected_and_not_cached(tmp_path):
     assert list(tmp_path.iterdir()) == []
 
 
+def test_concurrent_fetches_of_one_file_download_it_once(tmp_path):
+    """The dashboard asks for one variable from several requests at once.
+
+    Every request needs the same cache file. Racing on one shared ``.part``
+    name made ``os.replace`` fail with WinError 32 on Windows, and a thread
+    truncating the file mid-check made the reader call it "not NetCDF". One
+    download, one cached file, no errors, and every caller gets the same path.
+    """
+    body = _payload()
+    calls: list[Path] = []
+    inside = threading.Event()
+    release = threading.Event()
+
+    def download(url: str, dest: Path) -> cache.Download:
+        calls.append(dest)
+        inside.set()
+        with open(dest, "wb") as handle:
+            handle.write(body)
+            handle.flush()
+            release.wait(10)  # hold the handle open: the real race window
+        return cache.Download(len(body), len(body))
+
+    results: list[Path] = []
+    errors: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            results.append(
+                cache.fetch(
+                    "https://example.test/air.mon.mean.nc",
+                    cache_dir=tmp_path,
+                    download=download,
+                )
+            )
+        except BaseException as exc:  # noqa: BLE001 - the test wants the crash
+            errors.append(exc)
+
+    first = threading.Thread(target=run)
+    first.start()
+    assert inside.wait(10)
+
+    second = threading.Thread(target=run)
+    second.start()
+    time.sleep(0.5)  # give the second thread time to reach fetch
+    release.set()
+    first.join(20)
+    second.join(20)
+
+    assert errors == []
+    assert len(calls) == 1  # the second caller waits for the first
+    assert len(results) == 2 and results[0] == results[1]
+    assert results[0].read_bytes() == body
+
+
 def test_download_is_written_to_a_part_file_then_renamed(tmp_path):
     """A crash mid-download must not leave a file that looks cacheable."""
     fetcher = _Fetcher()
@@ -81,10 +137,15 @@ def test_download_is_written_to_a_part_file_then_renamed(tmp_path):
         "https://example.test/air.mon.mean.nc", cache_dir=tmp_path, download=download
     )
 
-    # While bytes are landing, only the .part file exists.
-    assert seen == [("air.mon.mean.nc.part", False)]
+    # While bytes are landing, only a .part file exists. The name carries the
+    # writer's pid and thread so two processes never share one file.
+    assert len(seen) == 1
+    part_name, final_exists = seen[0]
+    assert part_name.startswith("air.mon.mean.nc.")
+    assert part_name.endswith(".part")
+    assert final_exists is False
     assert path.exists()
-    assert not path.with_name(path.name + ".part").exists()
+    assert not list(tmp_path.glob("*.part"))
 
 
 def test_leftover_part_file_from_a_crash_is_ignored_and_replaced(tmp_path):

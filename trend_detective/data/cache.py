@@ -6,9 +6,11 @@ disk turns every run after the first into a local read.
 
 Correctness matters more than speed here: a truncated download would open as a
 valid NetCDF file with most of the record missing, silently producing a mostly
-NaN map. So a download is written to ``<name>.part``, checked against the
-``Content-Length`` of that same response, checked for a NetCDF magic number, and
-only then renamed into place. A failure leaves the cache exactly as it was.
+NaN map. So a download is written to ``<name>.<pid>.<thread>.part``, checked
+against the ``Content-Length`` of that same response, checked for a NetCDF magic
+number, and only then renamed into place. A failure leaves the cache exactly as
+it was. One lock per cache file means a burst of requests for the same variable
+downloads each chunk once and waits for it, rather than racing on one filename.
 
 The declared length comes from the download response rather than a separate
 ``HEAD``: THREDDS' subset service answers ``HEAD`` with 500, and a second
@@ -18,6 +20,7 @@ request would be both slower and racier.
 from __future__ import annotations
 
 import os
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -39,6 +42,22 @@ RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
 #: Attempts per chunk and the first backoff, in seconds (doubles each retry).
 ATTEMPTS = 4
 BACKOFF = 20.0
+
+#: One lock per cache destination. The dashboard fires several requests for one
+#: variable at once, so without this they all download the same chunk.
+_WRITE_LOCKS: dict[str, threading.Lock] = {}
+_WRITE_LOCKS_GUARD = threading.Lock()
+
+
+def _write_lock(path: Path) -> threading.Lock:
+    """The lock guarding one cache destination, created on first use."""
+    key = os.path.normcase(str(path))
+    with _WRITE_LOCKS_GUARD:
+        lock = _WRITE_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _WRITE_LOCKS[key] = lock
+        return lock
 
 
 class CacheError(RuntimeError):
@@ -124,37 +143,57 @@ def fetch(
         name = url.rstrip("/").rsplit("/", 1)[-1]
     path = cache_dir / name
 
-    if path.exists():
-        if _is_netcdf(path) and _accepts(validate, path):
-            return path
-        # A previous run (or another tool) left something unusable here.
-        path.unlink()
+    # Serialise every writer of this one file. The second caller waits here and
+    # then finds a finished download instead of starting its own.
+    with _write_lock(path):
+        if path.exists():
+            if _is_netcdf(path) and _accepts(validate, path):
+                return path
+            # A previous run (or another tool) left something unusable here.
+            path.unlink()
 
-    part = path.with_name(path.name + ".part")
-    try:
-        result = _as_download(
-            _with_retries(url, part, download, attempts, backoff, sleep)
+        # One part file per writer. The lock already orders threads in this
+        # process; a second process downloading the same chunk must not share a
+        # filename with us, or os.replace fails on Windows (WinError 32). Older
+        # builds used one shared "<name>.part"; clear that litter best-effort.
+        legacy = path.with_name(path.name + ".part")
+        if legacy.exists():
+            try:
+                legacy.unlink()
+            except OSError:
+                pass
+        part = path.with_name(
+            f"{path.name}.{os.getpid()}.{threading.get_ident()}.part"
         )
-        if result.expected is not None and result.written != result.expected:
-            raise IncompleteDownload(
-                f"{url}: got {result.written} of {result.expected} bytes; "
-                "the server truncated the transfer"
+
+        try:
+            result = _as_download(
+                _with_retries(url, part, download, attempts, backoff, sleep)
             )
-        if not _is_netcdf(part):
-            raise NotNetCDF(
-                f"{url}: response is not a NetCDF file "
-                "(an error page or a captive portal?)"
-            )
-        if not _accepts(validate, part):
-            raise NotUsable(
-                f"{url}: downloaded file starts like NetCDF but does not open; "
-                "the transfer was probably cut short"
-            )
-        os.replace(part, path)
-    except BaseException:
-        # Never leave a partial file that a later run might mistake for data.
-        part.unlink(missing_ok=True)
-        raise
+            if result.expected is not None and result.written != result.expected:
+                raise IncompleteDownload(
+                    f"{url}: got {result.written} of {result.expected} bytes; "
+                    "the server truncated the transfer"
+                )
+            if not _is_netcdf(part):
+                raise NotNetCDF(
+                    f"{url}: response is not a NetCDF file "
+                    "(an error page or a captive portal?)"
+                )
+            if not _accepts(validate, part):
+                raise NotUsable(
+                    f"{url}: downloaded file starts like NetCDF but does not open; "
+                    "the transfer was probably cut short"
+                )
+            os.replace(part, path)
+        except BaseException:
+            # Never leave a partial file that a later run might mistake for data.
+            # Another handle may still hold it; that is litter, never cache.
+            try:
+                part.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
 
     return path
 
