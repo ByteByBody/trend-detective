@@ -9,6 +9,7 @@ and shows them side by side — the "detective who won't cry wolf."
 - Design doc: `docs/superpowers/specs/2026-11-03-trend-detective-design.md`
 - Implementation plan: `docs/superpowers/plans/2026-11-03-trend-detective-cry-wolf.md`
 - Plain-English concepts: `docs/plain-english-concepts.md`
+- Presentation Q&A: `docs/presentation-qa.md`
 - Algorithms (math + pseudocode): `docs/algorithms.md`
 
 ## What it does
