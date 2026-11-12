@@ -1,7 +1,7 @@
 """Field significance: Benjamini-Hochberg false-discovery-rate control.
 
 Turns "5% chance of a false positive per pixel" into "at most 5% of the pixels
-I flag are false". See docs/algorithms.md section 5 and concepts doc section 2.1.
+I flag are false". See docs/algorithms.md section 5.
 """
 
 from __future__ import annotations
