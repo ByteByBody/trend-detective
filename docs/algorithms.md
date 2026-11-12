@@ -55,8 +55,11 @@ value[t,i,j] = seasonal[t] + slope[i,j] * t + noise[t,i,j]
   then subtract `clim[t mod 12]` from each timestep.
 - **`stl`:** `statsmodels.tsa.seasonal.STL(series, period=12, robust=True)` per pixel;
   subtract the returned `seasonal` component.
-- **`auto`:** `stl` if `statsmodels` imports, else `climatology` (the shipped
-  environment has no `statsmodels`, so the default path is `climatology`).
+- **`auto`:** `stl` when `statsmodels` imports, else `climatology`. `statsmodels` is
+  an optional accelerator, not a declared dependency: without it `auto` is climatology,
+  with it (as on this machine) `auto` is STL. STL's per-pixel robust fits dominate the
+  whole pipeline — **minutes** for a world grid against seconds for climatology — which
+  is why the API persists each variable's finished body to disk (§13).
 - **NaN rule:** where the input is NaN, the output is NaN. Never fill.
 - **STL fallback:** a pixel the STL cannot handle — any missing month, or a series
   shorter than two periods (< 24 months) — is deseasonalized with the **climatology**
@@ -367,14 +370,21 @@ extract_grid:
 ```
 
 **Units are converted at the source boundary.** Five catalog variables share one
-source, and three of the files do not use the catalog's units. Converting in
+source, and four of the files do not use the catalog's units. Converting in
 `extract_grid` (rather than in the UI or the pipeline) means every other layer —
 the chart, the slope map, the fingerprint vectors — can assume catalog units.
 The cached file keeps PSL's raw numbers, so re-extracting never double-converts.
 
+All five files live in `surface_gauss`, PSL's T62 Gaussian directory, so the
+variables share one horizontal grid (94×192 raw, 47×96 at stride 2) and the
+fingerprint can compare them at a single pixel. Temperature deliberately reads
+`surface_gauss/air.2m.mon.mean.nc` rather than the `surface/` twin: that twin is
+a 2.5° grid *and* holds the 0.995 sigma level, not the 2 m field the catalog
+label promises.
+
 | catalog variable | PSL variable | file units | conversion | catalog units | check |
 | --- | --- | --- | --- | --- | --- |
-| `surface_temperature` | `air` | °C | identity | °C | — |
+| `surface_temperature` | `air` | K | − 273.15 | °C | 288.15 K → 15 °C |
 | `snow_water_equivalent` | `weasd` | kg/m2 | identity | kg/m2 | 1 kg/m2 of water = 1 mm; catalog keeps kg/m2 |
 | `precipitation` | `prate` | kg/m²/s | × 86,400 | mm/day | July ITCZ 6.8e-5 → 5.9 mm/day |
 | `soil_moisture_rootzone` | `soilw` | fraction | × 1000 × 1.9 m | kg/m² | Amazon 0.26 → 494 kg/m² |
@@ -411,14 +421,16 @@ and basenames would collide.
 requested in `PSL_CHUNK_YEARS` slices (default 5) and concatenated on the time
 axis. Each chunk is a separate cache entry, so a failure loses one chunk rather
 than the whole download, and a rerun resumes from the chunks already on disk.
-Measured: 60 months at stride 2 = 22.5 s cold, 0.65 MB, then 0.0 s from cache.
+Each 60-month chunk is 1.1 MB at stride 2: tens of seconds cold, then 0.0 s from
+cache.
 
 A burst of chunk requests earns `429 Too Many Requests`, so `fetch` retries
 `429/500/502/503/504` and connection errors with exponential backoff
 (`20 s, 40 s, 80 s`). Any other client error fails immediately: a 404 will still
 be a 404.
 
-**Measured analysis cost** (cold, 10512-pixel 2.5° world):
+**Measured analysis cost** (cold, on the former 10512-pixel 2.5° temperature
+grid; the T62 grid the source now serves has 4512 pixels at stride 2):
 
 | span | months | stride | px | analysis |
 | --- | --- | --- | --- | --- |
@@ -427,10 +439,10 @@ be a 404.
 | 2005–2024 | 240 | 1 | 10512 | 17 s |
 | 1980–2024 | 540 | 2 | 2664 | 43 s |
 
-Hence the shipped default is stride 2 over 1980–2024: 37×72 pixels, 540 months,
-43 s of analysis from the warm cache (0.9 s to load). The first run additionally
-downloads nine 0.65 MB chunks. `PSL_STRIDE = 1` buys detail for a roughly linear
-cost in pixels.
+Hence the shipped default is stride 2 over 1980–2024: 47×96 pixels, 540 months,
+one analysis per variable from the warm cache (0.9 s to load). The first run
+additionally downloads nine 1.1 MB chunks. `PSL_STRIDE = 1` buys detail for a
+roughly linear cost in pixels.
 
 **Reader dependency:** none beyond the base install. `open_dataset` tries
 `netCDF4`, `h5netcdf`, then `scipy`, so an HDF5-capable backend is used if
@@ -472,6 +484,13 @@ Theil–Sen slope over the patch, in catalog units.
   reference excluded. At a few dozen regions an HNSW index would only add a
   dependency and an approximation; the original design's HNSW is deferred until
   the region count makes it worth it.
+- **A variable on a different grid is skipped.** A field whose shape disagrees
+  with the label field cannot define those regions, so its column stays NaN
+  rather than raising. PSL used to make this real — `air` was on a 2.5° grid
+  (37 by 72 cells at stride 2) while the other four were on T62 (47 by 96), so
+  selecting surface temperature left one aligned field and the build reported
+  `unavailable`. Temperature now reads the T62 `air.2m` file, so all five align;
+  the guard stays as a safety net for a source that mixes grids.
 - **Rings are walked, not approximated.** `region_rings` collects each region's
   boundary edges (cell sides facing a non-region cell or the grid edge) with a
   consistent orientation and chains them into loops, so a two-cell region
@@ -493,13 +512,17 @@ kept variable names for the "driving variables" legend.
   noted as a limitation. BH ordering must be **stable** so equal p-values give a stable threshold.
 - **Performance:** pair-index vectors are built once per grid and reused; the per-pixel
   loop is faster than a vectorised block here (measured: 45×90 → 3.7 s cold). Results are
-  cached per variable in the API.
+  cached per variable in the process and persisted to disk across restarts (§13).
 - **Autocorrelation estimate:** the lag-1 `rho` is estimated on the linear-detrended
   residual, floored at 1.0, clamped to `[0, 0.99]`.
 - **Significance vs magnitude:** p answers "real vs luck", not size. The evidence card reports
   the slope alongside p so users don't over-read significance.
 - **Never invent data:** gaps excluded and flagged; a pixel below `min_valid` is reported as
-  "insufficient record", never imputed.
+  "insufficient record", never imputed. A permanently masked pixel (zero finite months) must
+  count **finite** months, not time slots: `_sen_slope_1d` guards on `count_nonzero(isfinite)`
+  so an all-NaN pair vector returns NaN quietly instead of firing `np.nanmedian`'s
+  "All-NaN slice encountered". Pairs stay on original indices, so a gap keeps its true time
+  distance — dropping NaNs would compress the axis and bias the slope.
 - **No HDF5 reader on Python 3.15:** `h5py` has no CPython 3.15 wheel and its source build
   fails; `netCDF4` likewise. Anything HDF5-shaped (including PSL's raw `.nc` files) is
   therefore unreadable here. NCSS sidesteps it by emitting NetCDF3, which `scipy` reads.
@@ -515,9 +538,55 @@ kept variable names for the "driving variables" legend.
   Web Mercator is not — screen y grows like `ln(tan(pi/4 + lat/2))`. Drawing equal-latitude
   rows put a 60°N feature near 76°N, so continents drifted poleward and their colour spilled
   into the sea. `web/projection.js` samples each output row at its Mercator latitude, and
-  `gridBounds` clamps to `±85.05112878`. The canvas is drawn at 256+ rows so the equatorial
+  `fieldBounds` clamps to `±85.05112878`. The canvas is drawn at 256+ rows so the equatorial
   rows do not go blocky.
+- **One geographic box for the raster and the overlay:** the grid longitudes are cell centres,
+  so the field reaches a half step past its outermost centre. Clamping the west edge to -180
+  while the east stopped at 178.125 made the overlay 358.125° wide while `buildRaster` still
+  mapped its pixels as if they filled 360°, so every painted cell sat west of its own meridian
+  by up to 1.86° and drifted off the selection rectangle. `TDTrend.fieldBounds` now returns the
+  box the overlay, the border, the fit and the pixel longitudes all read; when the centres wrap
+  the globe it spans the full 360°, and a regional grid spans only its own degrees.
 - **No smoothing on the slope raster:** bilinear upscaling of a few dozen rows blurred
   coastline colour into the ocean as a soft glow. The overlay sets
   `className: "slope-layer"` and `.slope-layer { image-rendering: pixelated }`. Satellite
   tiles keep normal filtering — nearest-neighbour would make them look worse, not better.
+
+---
+
+## 13. Persisted analysis cache — `data/analysis_cache.py`
+
+The cry-wolf body is expensive — with `statsmodels` installed, STL deseasonalization
+dominates (§2) and costs minutes per variable — and the API's in-process `lru_cache`
+lives only as long as one server process, so a restart would re-pay the whole cost. The
+finished JSON body is therefore written under `data/cache/analysis/` and reused.
+
+**Signature:** `signature_of(source=None) -> str`, `load(variable, signature=None,
+cache_dir=None) -> dict | None`, `save(variable, body, signature=None, cache_dir=None)
+-> Path`.
+
+- **Signature in the filename.** `signature_of()` hashes `ANALYSIS_SCHEMA`, the source,
+  the span/stride, the FDR `q`, the valid-fraction and patch-size gates, whether
+  `statsmodels` imports, and the NumPy version. The source is the one that *actually
+  served* — the app passes the resolved source class via `_analysis_signature()` — not
+  merely `config.DATA_SOURCE`, because a test or a second deployment can reuse the
+  configured name while serving different data. Any change gives a new name, so a body
+  computed under other parameters, libraries, or data is *invisible*, never served.
+- **`ANALYSIS_SCHEMA` is the manual lever.** The signature sees configuration, not
+  code or the dataset table, so the module bumps `ANALYSIS_SCHEMA` when a body's
+  inputs change invisibly. It is `2`: the bump retired bodies computed before
+  surface temperature moved to the T62 `air.2m` file.
+- **File:** `<cache>/analysis/<variable>.<signature>.json`.
+- **Atomic write.** The body goes to `<name>.<pid>.<thread>.part` and is renamed into
+  place with `os.replace`, so a crash or a concurrent writer never leaves a half-written
+  file at the real name; a failed write deletes its part file.
+- **Corrupt reads as absent.** An unreadable file, or JSON without a `variable` key, is
+  treated as a miss and recomputed — it is never raised.
+- **Cache root.** `CACHE_DIR` defaults to the raw data cache root (`data/cache/`), so the
+  two trees are gitignored together; tests override just this module attribute to keep
+  off the real cache without disturbing the raw chunks.
+- **Measured.** A cold cry-wolf body — STL deseasonalization plus trend testing —
+  took **615 s** for `surface_temperature` on the shipped 47×96 grid (four-CPU
+  machine). The body is written at the end of that run, so an interrupted analysis
+  saves nothing and is recomputed; a disk hit returns the stored body in under a
+  second and survives a `--reload`.

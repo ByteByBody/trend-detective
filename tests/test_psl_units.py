@@ -23,6 +23,12 @@ def test_soilw_fraction_becomes_kg_per_m2_over_the_10_200cm_layer():
     assert out.attrs["units"] == "kg m-2"
 
 
+def test_air_2m_kelvin_becomes_degc():
+    out = psl.air_to_degc(_da([[288.15]]))
+    assert np.isclose(out.values[0, 0], 15.0)  # 288.15 K = 15 degC
+    assert out.attrs["units"] == "degC"
+
+
 def test_lhtfl_becomes_mm_per_day_and_keeps_the_sign():
     out = psl.lhtfl_to_mm_per_day(_da([[133.6]]))
     assert np.isclose(out.values[0, 0], 133.6 / 2.5e6 * 86400)

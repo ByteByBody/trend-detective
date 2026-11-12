@@ -42,11 +42,14 @@ PSL_BASE = "https://psl.noaa.gov/thredds"
 NCSS_BASE = f"{PSL_BASE}/ncss/grid"
 
 #: Catalog variable -> (path under the THREDDS root, variable name in the file).
-#: Two live in ``surface_gauss`` (where precipitation, snow, soil moisture and
-#: latent heat live); temperature is in ``surface``.
+#: All five live in ``surface_gauss``, the T62 Gaussian directory, so they share
+#: one horizontal grid and the fingerprint can compare them at a single pixel.
+#: Temperature uses ``air.2m``: the ``surface/air.mon.mean.nc`` twin is a 2.5 deg
+#: grid and holds the 0.995 sigma level, which is not the 2 m field the catalog
+#: label promises.
 DATASETS: dict[str, tuple[str, str]] = {
     "surface_temperature": (
-        "Datasets/ncep.reanalysis.derived/surface/air.mon.mean.nc",
+        "Datasets/ncep.reanalysis.derived/surface_gauss/air.2m.mon.mean.nc",
         "air",
     ),
     "precipitation": (
@@ -77,8 +80,25 @@ SECONDS_PER_DAY = 86400.0
 WATER_DENSITY_KG_M3 = 1000.0
 #: The soil-moisture file is the 10-200 cm layer, 1.9 m thick.
 SOILW_LAYER_M = 1.9
+#: The 2 m air-temperature file is in kelvin; the catalog reports Celsius.
+KELVIN_OFFSET = 273.15
 #: Latent heat of vaporization, the standard stand-in for a monthly mean.
 LATENT_HEAT_J_PER_KG = 2.5e6
+
+
+def air_to_degc(da: xr.DataArray) -> xr.DataArray:
+    """PSL 2 m air temperature (kelvin) to Celsius.
+
+    The Gaussian file stores K (valid range 150-400); the catalog and the POWER
+    source both report degC. The offset is exact, not fitted: 288.15 K is
+    15 degC.
+    """
+    out = da - KELVIN_OFFSET
+    out.attrs = dict(da.attrs, units="degC")
+    return out
+
+
+air_to_degc.units = "degC"
 
 
 def prate_to_mm_per_day(da: xr.DataArray) -> xr.DataArray:
@@ -127,6 +147,7 @@ lhtfl_to_mm_per_day.units = "mm day-1"
 #: already arrives in catalog units. Keyed by the name inside the file, not the
 #: catalog key, because that is what :func:`extract_grid` receives.
 CONVERSIONS: dict[str, Callable[[xr.DataArray], xr.DataArray]] = {
+    "air": air_to_degc,
     "prate": prate_to_mm_per_day,
     "soilw": soilw_to_kg_per_m2,
     "lhtfl": lhtfl_to_mm_per_day,

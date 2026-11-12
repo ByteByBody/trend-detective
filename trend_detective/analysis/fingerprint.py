@@ -37,6 +37,12 @@ def region_vectors(
     A variable contributes to a region only when more than half of that
     region's pixels have a finite slope. One surviving pixel is not a trend
     vector; it is a hole in the record wearing a trend's clothes.
+
+    A field whose shape differs from ``labels`` describes a different grid, so it
+    cannot define these regions and is skipped (its column stays all-NaN). The
+    live PSL source is the reason this happens: it serves ``air`` on a 2.5-degree
+    grid and every other variable on the T62 grid, so the selected variable's
+    patches and another variable's field can disagree in shape.
     """
     labels = np.asarray(labels)
     variables = list(slopes)
@@ -52,6 +58,8 @@ def region_vectors(
             continue
         for col, name in enumerate(variables):
             field = np.asarray(slopes[name], dtype=float)
+            if field.shape != labels.shape:
+                continue
             values = field[mask]
             finite = np.isfinite(values)
             if finite.sum() * 2 > cell_count:

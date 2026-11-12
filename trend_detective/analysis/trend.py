@@ -16,7 +16,11 @@ import xarray as xr
 def _sen_slope_1d(x: np.ndarray) -> float:
     """Median pairwise slope of a 1-D series (units per step)."""
     n = x.size
-    if n < 2:
+    # Count *finite* months, not slots: a permanently masked pixel (soil
+    # moisture over ocean) has slots but no data. Without this, the pair vector
+    # is all-NaN and np.nanmedian warns; the answer is NaN either way, but the
+    # warning noise buries real ones.
+    if n < 2 or np.count_nonzero(np.isfinite(x)) < 2:
         return math.nan
     i, j = np.triu_indices(n, 1)
     slopes = (x[j] - x[i]) / (j - i)

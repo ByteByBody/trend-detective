@@ -19,6 +19,7 @@ from scipy import ndimage
 
 from trend_detective import catalog, config
 from trend_detective.analysis import fingerprint, pipeline
+from trend_detective.data import analysis_cache
 from trend_detective.data import base as data_source
 
 _WEB_DIR = Path(__file__).resolve().parents[2] / "web"
@@ -125,7 +126,34 @@ def _annual_anomaly(da) -> list[float]:
 
 @lru_cache(maxsize=None)
 def _demo_body(variable: str) -> dict:
-    """Run the cry-wolf pipeline once per variable and cache the JSON body."""
+    """The cry-wolf body for a variable, served from disk when possible.
+
+    A cold analysis is minutes (STL deseasonalization dominates), so a finished
+    body is persisted under ``data/cache/analysis`` and reused across process
+    restarts; only a genuine miss recomputes it.
+    """
+    signature = _analysis_signature()
+    cached = analysis_cache.load(variable, signature=signature)
+    if cached is not None:
+        return cached
+    body = _compute_demo_body(variable)
+    analysis_cache.save(variable, body, signature=signature)
+    return body
+
+
+def _analysis_signature() -> str:
+    """The disk-cache signature for the source that is actually serving.
+
+    Keyed on the resolved source class rather than only ``config.DATA_SOURCE``: a
+    test or another deployment can reuse the configured name while serving
+    different data, and its body must never be served here.
+    """
+    source = f"{type(_SOURCE).__module__}.{type(_SOURCE).__qualname__}"
+    return analysis_cache.signature_of(source=source)
+
+
+def _compute_demo_body(variable: str) -> dict:
+    """Run the cry-wolf pipeline once per variable and build the JSON body."""
     da = _demo_grid(variable)
     res = pipeline.cry_wolf(da)
 
@@ -250,6 +278,24 @@ def _fingerprint_build(key, selected: str, served: list[str], labels: np.ndarray
     grid = _demo_grid(selected)
     lat = np.asarray(grid["lat"].values, dtype=float)
     lon = np.asarray(grid["lon"].values, dtype=float)
+    shape = np.shape(labels)
+    if shape != (lat.size, lon.size):
+        # A body cached from an older dataset can describe another grid (the
+        # former 2.5-degree temperature file was 37x72; the T62 grid is 47x96).
+        # Every later step indexes one against the other, so refuse here with an
+        # actionable reason instead of raising a boolean-index error.
+        found = " by ".join(str(n) for n in shape)
+        with _FP_LOCK:
+            if _FP_STATE.get("key") == key:
+                _FP_STATE.update(
+                    status="unavailable",
+                    reason=(
+                        f"the patch field is {found} but the {selected} grid is "
+                        f"{lat.size} by {lon.size}; the cached analysis is stale — "
+                        "delete data/cache/analysis and reload"
+                    ),
+                )
+        return
 
     slopes: dict[str, np.ndarray] = {}
     done = 0
@@ -563,6 +609,22 @@ def get_timeseries(
 def health() -> dict:
     """Liveness probe: never touches the data source, so it cannot time out."""
     return {"status": "ok"}
+
+
+@app.middleware("http")
+async def _no_store_frontend(request, call_next):
+    """Serve the frontend shell and assets uncached.
+
+    Caching the HTML shell is the one failure the ``?v=`` query bump cannot
+    fix: a stale shell keeps pointing at the old script URLs, so a visitor can
+    reload forever and never receive a new feature. Dev serves everything
+    no-store; the version bump stays as a belt-and-braces cache key.
+    """
+    response = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+    return response
 
 
 @app.get("/")

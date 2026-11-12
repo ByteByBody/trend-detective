@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import xarray as xr
 
@@ -61,6 +63,42 @@ def test_grid_paths_match_per_pixel_reference():
     )
     assert np.allclose(trend._sen_slopes(flat), ref_slope, equal_nan=True)
     assert np.allclose(trend._mk_pvalues(flat, True), ref_p, equal_nan=True)
+
+
+def test_a_pixel_with_no_usable_months_is_nan_without_a_warning():
+    # Permanently masked cells (soil moisture or snow over open ocean) have zero
+    # finite months. The slope must be NaN and the all-NaN median must not warn:
+    # a wall of RuntimeWarnings hides the next real error.
+    flat = np.full((24, 3), np.nan)
+    flat[:, 1] = 0.0  # a sane pixel next to the dead ones
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        out = trend._sen_slopes(flat)
+
+    assert [c.category.__name__ for c in caught] == []
+    assert np.isnan(out[0]) and np.isnan(out[2])
+    assert float(out[1]) == 0.0
+
+
+def test_a_pixel_with_one_usable_month_is_nan_without_a_warning():
+    flat = np.full((24, 1), np.nan)
+    flat[5, 0] = 3.0  # one month is not a trend
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        out = trend._sen_slopes(flat)
+
+    assert [c.category.__name__ for c in caught] == []
+    assert np.isnan(out[0])
+
+
+def test_missing_months_keep_their_true_time_spacing():
+    # Pairs are formed on original indices, so a gap contributes its real
+    # distance. Dropping NaNs would compress the axis and treble this slope.
+    flat = np.array([[0.0], [np.nan], [np.nan], [3.0]])
+    out = trend._sen_slopes(flat)
+    assert float(out[0]) == 1.0
 
 
 def test_nan_free_fast_path_matches_nan_aware_path():

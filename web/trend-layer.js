@@ -18,7 +18,11 @@
   "use strict";
 
   const CELL_PX = 6;
-  const FILL_ALPHA = 235;
+  // Fill opacity tracks magnitude: a weak flag is a whisper, a strong one is
+  // solid. The patch outline, not the fill, carries the flag/no-flag verdict,
+  // so faint near-zero cells still read as flagged without washing out the map.
+  const MIN_FILL_ALPHA = 72;
+  const MAX_FILL_ALPHA = 235;
   const OUTLINE_ALPHA = 255;
   const COOL = [91, 140, 255];
   const NEUTRAL = [242, 233, 216];
@@ -70,6 +74,38 @@
     ];
   }
 
+  function fieldBounds(latGrid, lonGrid, maxLat) {
+    // The geographic box the raster image is drawn on. buildRaster maps every
+    // pixel's longitude through this same box, so a cell cannot drift away from
+    // the selection rectangle that outlines it.
+    const limit = maxLat === undefined || maxLat === null ? 90 : maxLat;
+    const dLat = spacing(latGrid) / 2;
+    const dLon = spacing(lonGrid) / 2;
+    const latLo = Math.min.apply(null, latGrid);
+    const latHi = Math.max.apply(null, latGrid);
+    const lonLo = Math.min.apply(null, lonGrid);
+    const lonHi = Math.max.apply(null, lonGrid);
+    const south = Math.max(-limit, latLo - dLat);
+    const north = Math.min(limit, latHi + dLat);
+    let west;
+    let east;
+    if (lonHi - lonLo + 2 * dLon >= 359.999) {
+      // The centres wrap the globe, so the cells tile the full circle. Anchoring
+      // west at -180 and spanning all 360 degrees is what keeps every cell on
+      // its own meridian; clamping the west edge to -180 while letting the east
+      // stop a half step short squeezed the whole field westward.
+      west = -180;
+      east = 180;
+    } else {
+      west = Math.max(-180, lonLo - dLon);
+      east = Math.min(180, lonHi + dLon);
+    }
+    return [
+      [south, west],
+      [north, east],
+    ];
+  }
+
   function flagAt(demo, i, j) {
     const naive = Boolean(demo.naive_mask && demo.naive_mask[i] && demo.naive_mask[i][j]);
     const corrected = Boolean(
@@ -83,6 +119,25 @@
     if (flag.corrected) return 2;
     if (flag.naive) return 1;
     return 0;
+  }
+
+  function columnForLongitude(lon, lonGrid) {
+    // Grid longitudes are cell CENTRES, so a cell owns the half-step either
+    // side of its coordinate. Distance wraps at the dateline: a grid whose
+    // first centre sits on -180 also owns the sliver east of 178.125.
+    let bj = 0;
+    let best = Infinity;
+    for (let j = 0; j < lonGrid.length; j++) {
+      let d = lonGrid[j] - lon;
+      if (d > 180) d -= 360;
+      if (d < -180) d += 360;
+      const dd = d * d;
+      if (dd < best) {
+        best = dd;
+        bj = j;
+      }
+    }
+    return bj;
   }
 
   function describeCell(demo, i, j) {
@@ -160,7 +215,7 @@
     return rows;
   }
 
-  function buildRaster(demo, mode, height, mercatorRows) {
+  function buildRaster(demo, mode, height, mercatorRows, bounds) {
     const ny = demo.lat.length;
     const nx = demo.lon.length;
     const width = nx * CELL_PX;
@@ -168,6 +223,19 @@
     const range = trendRange(demo, mode);
     const wanted = modeMask(mode);
     const rows = rowsFor(demo.lat, h, mercatorRows);
+    const box = bounds || fieldBounds(demo.lat, demo.lon);
+    const west = box[0][1];
+    const east = box[1][1];
+    // Column ownership comes from each pixel's own longitude across the same
+    // box the overlay is drawn on: the grid coordinates are cell centres, so a
+    // pixel belongs to the cell whose meridian is nearest. Mapping the pixels
+    // as if they filled the whole world while the overlay stopped a half step
+    // short shifted every cell west of its own meridian.
+    const columns = new Uint16Array(width);
+    for (let x = 0; x < width; x++) {
+      const lon = west + ((x + 0.5) / width) * (east - west);
+      columns[x] = columnForLongitude(lon, demo.lon);
+    }
     const data = new Uint8ClampedArray(width * h * 4);
     const classes = new Uint8Array(width * h);
     let count = 0;
@@ -175,22 +243,33 @@
     for (let y = 0; y < h; y++) {
       const i = Math.min(ny - 1, Math.max(0, rows[y]));
       for (let x = 0; x < width; x++) {
-        const j = Math.min(nx - 1, Math.floor(x / CELL_PX));
+        const j = columns[x];
         const cls = classify(demo, i, j);
         if (!wanted(cls)) continue;
+        const value = demo.slope[i][j];
+        // A flag with no fitted slope has nothing to colour. Leave it
+        // transparent instead of painting a neutral block over the map.
+        if (value === null || value === undefined || !isFinite(value)) continue;
         const k = (y * width + x) * 4;
-        const rgb = fillFor(demo.slope[i][j], range.min, range.max);
+        const rgb = fillFor(value, range.min, range.max);
+        // Symmetric range: |max| is the 98th-percentile magnitude.
+        const strength = Math.min(1, Math.abs(value) / (Math.abs(range.max) || 1));
         data[k] = rgb[0];
         data[k + 1] = rgb[1];
         data[k + 2] = rgb[2];
-        data[k + 3] = FILL_ALPHA;
+        data[k + 3] = Math.round(
+          MIN_FILL_ALPHA + (MAX_FILL_ALPHA - MIN_FILL_ALPHA) * strength
+        );
         classes[y * width + x] = cls;
       }
     }
 
     for (let i = 0; i < ny; i++) {
       for (let j = 0; j < nx; j++) {
-        if (wanted(classify(demo, i, j))) count += 1;
+        if (!wanted(classify(demo, i, j))) continue;
+        const value = demo.slope[i][j];
+        if (value === null || value === undefined || !isFinite(value)) continue;
+        count += 1;
       }
     }
 
@@ -210,18 +289,11 @@
         const dropped = cls === 1 || left === 1 || right === 1 || up === 1 || down === 1;
         if (dropped && (x + y) % 12 >= 6) continue;
         const color = dropped ? EMBER : PAPER;
-        for (let dy = 0; dy < 2; dy++) {
-          for (let dx = 0; dx < 2; dx++) {
-            const px = x + dx;
-            const py = y + dy;
-            if (px >= width || py >= h) continue;
-            const k = (py * width + px) * 4;
-            data[k] = color[0];
-            data[k + 1] = color[1];
-            data[k + 2] = color[2];
-            data[k + 3] = OUTLINE_ALPHA;
-          }
-        }
+        const k = (y * width + x) * 4;
+        data[k] = color[0];
+        data[k + 1] = color[1];
+        data[k + 2] = color[2];
+        data[k + 3] = OUTLINE_ALPHA;
       }
     }
 
@@ -240,6 +312,7 @@
     CELL_PX: CELL_PX,
     cellAt: cellAt,
     cellBounds: cellBounds,
+    fieldBounds: fieldBounds,
     classify: classify,
     describeCell: describeCell,
     trendRange: trendRange,

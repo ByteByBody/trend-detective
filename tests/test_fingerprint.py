@@ -35,6 +35,23 @@ def test_a_variable_at_exactly_half_coverage_is_dropped():
     assert rv.usable.tolist() == [0]
 
 
+def test_a_field_on_a_different_grid_is_skipped_not_crashed():
+    # PSL serves air on a 2.5-degree grid and the rest on the T62 grid, so a
+    # variable's field can disagree in shape with the selected variable's patch
+    # field. It cannot define these regions and is skipped, rather than raising
+    # "boolean index did not match indexed array".
+    labels = np.array([[1, 1], [0, 2]])
+    slopes = {
+        "aligned": np.array([[1.0, 3.0], [0.0, 7.0]]),
+        "other_grid": np.zeros((3, 5)),
+    }
+    rv = fp.region_vectors(slopes, labels)  # must not raise
+    by_name = {name: rv.matrix[0, i] for i, name in enumerate(rv.variables)}
+    assert np.isfinite(by_name["aligned"])
+    assert np.isnan(by_name["other_grid"])
+    assert rv.usable.tolist() == [1, 1]
+
+
 def test_standardize_drops_a_zero_variance_variable():
     matrix = np.array([[1.0, 5.0], [2.0, 5.0], [3.0, 5.0]])  # col 1 constant
     z, kept = fp.standardize(matrix, ["a", "b"])

@@ -1,3 +1,5 @@
+import re
+
 from fastapi.testclient import TestClient
 
 from trend_detective.api import app as app_module
@@ -6,32 +8,50 @@ from trend_detective.api.app import app
 client = TestClient(app)
 
 
-def test_index_contains_key_elements():
-    html = client.get("/").text
-    assert "naive" in html.lower() and "corrected" in html.lower()
-    assert "leaflet" in html.lower()
+def index() -> str:
+    return client.get("/").text
 
 
-def test_index_links_app_js_and_css():
-    html = client.get("/").text
-    assert "app.js" in html and "styles.css" in html
-    assert "plotly" in html.lower()
+def app_js() -> str:
+    return client.get("/static/app.js").text
 
 
-def test_index_exposes_diagnostics_and_keyboard_path():
-    html = client.get("/").text
-    for element_id in ("stat-insufficient", "stat-morans", "verdict-line", "chart"):
-        assert element_id in html
-    assert 'tabindex="0"' in html  # maps are keyboard-reachable
+def styles() -> str:
+    return client.get("/static/styles.css").text
 
 
-def test_static_assets_served():
-    assert client.get("/static/app.js").status_code == 200
-    assert client.get("/static/styles.css").status_code == 200
+def test_static_assets_are_served():
+    for name in (
+        "app.js",
+        "styles.css",
+        "projection.js",
+        "format.js",
+        "trend-layer.js",
+        "chart-view.js",
+    ):
+        assert client.get(f"/static/{name}").status_code == 200
+
+
+def test_the_shell_and_assets_are_not_cached_so_a_stale_build_cannot_persist():
+    # A cached HTML shell keeps pointing at old ``?v=`` scripts, so a visitor
+    # can reload forever and never receive a new feature. Dev serves everything
+    # no-store; the version bump stays as a belt-and-braces cache key.
+    for path in ("/", "/static/app.js", "/static/styles.css"):
+        r = client.get(path)
+        assert r.status_code == 200
+        assert "no-store" in r.headers.get("cache-control", "")
+
+
+def test_the_page_declares_a_build_stamp_matching_the_asset_version():
+    html = index()
+    version = re.search(r"styles\.css\?v=(\d+)", html).group(1)
+    stamp = re.search(r'data-build="(\d+)"', html)
+
+    assert stamp is not None, "the page must show which build it is"
+    assert stamp.group(1) == version
 
 
 def test_health_endpoint_reports_ok():
-    # Deployments and the hackathon demo check this before trusting the URL.
     r = client.get("/health")
 
     assert r.status_code == 200
@@ -39,8 +59,6 @@ def test_health_endpoint_reports_ok():
 
 
 def test_health_does_not_touch_the_data_source(monkeypatch):
-    # A health check that loads a live grid would time out on a cold PSL fetch
-    # and report the app unhealthy while it is merely busy.
     def explode(variable):  # pragma: no cover - must not run
         raise AssertionError("health must not load data")
 
@@ -50,8 +68,7 @@ def test_health_does_not_touch_the_data_source(monkeypatch):
 
 
 def test_index_declares_a_favicon():
-    # Without a <link rel="icon"> the browser requests /favicon.ico and logs 404.
-    html = client.get("/").text
+    html = index()
     assert 'rel="icon"' in html
     assert "favicon.svg" in html
 
@@ -64,299 +81,398 @@ def test_favicon_is_served_as_svg():
     assert "<svg" in r.text
 
 
+def test_index_shows_one_map_and_one_mode_switch():
+    html = index()
+    assert 'id="map"' in html
+    assert "map-naive" not in html
+    assert "map-corrected" not in html
+    assert 'role="radiogroup"' in html
+    assert html.count('id="mode-') == 2
+
+
+def test_the_map_is_keyboard_reachable():
+    html = index()
+    map_tag = html.split('id="map"', 1)[1].split(">", 1)[0]
+    assert 'tabindex="0"' in map_tag
+    assert "Arrow keys" in map_tag
+
+
+def test_index_carries_the_verdict_hud():
+    html = index()
+    for element_id in (
+        "mode",
+        "count-naive",
+        "count-corrected",
+        "delta",
+        "legend",
+        "legend-unit",
+        "legend-min",
+        "legend-zero",
+        "legend-max",
+        "legend-key-dashed",
+        "facts",
+        "loupe",
+        "loupe-coords",
+        "loupe-trend",
+        "stage-name",
+        "stage-source",
+        "stripe-band",
+    ):
+        assert element_id in html
+
+
+def test_index_carries_the_cell_readout_and_both_verdicts():
+    html = index()
+    for element_id in (
+        "cell-readout",
+        "cell-empty",
+        "cell-detail",
+        "cell-coords",
+        "cell-trend",
+        "cell-p",
+        "cell-naive",
+        "cell-corrected",
+        "cell-status",
+    ):
+        assert element_id in html
+    assert "Navie" not in html  # a typo in a verdict pill would be invisible
+
+
+def test_index_carries_the_chart_and_its_gesture_hint():
+    html = index()
+    assert 'id="chart"' in html
+    assert "Scroll to zoom" in html
+    assert "double-click to reset" in html
+    assert 'id="chart-reset"' in html
+    assert "chart-grip" not in html
+
+
+def test_index_has_a_method_dialog():
+    html = index()
+    assert "<dialog" in html
+    assert 'id="method"' in html
+    assert 'id="method-open"' in html
+    assert 'id="data-source"' in html
+    for element_id in ("method-cutoff", "method-coverage", "method-morans", "method-grid"):
+        assert element_id in html
+
+
+def test_index_links_the_module_stack_in_order():
+    html = index()
+    order = [
+        "projection.js",
+        "format.js",
+        "trend-layer.js",
+        "chart-view.js",
+        "app.js",
+    ]
+    positions = [html.index(name) for name in order]
+    assert positions == sorted(positions)
+
+
+def test_page_loads_the_new_type_roles():
+    html = index()
+    assert "Bricolage+Grotesque" in html
+    assert "Azeret+Mono" in html
+    assert "Instrument+Sans" not in html
+    assert "Source+Serif+4" not in html
+    assert "IBM+Plex+Mono" not in html
+
+
 def test_index_does_not_claim_the_bundled_sample_when_serving_live_data():
-    # The footer used to say "Synthetic grid with a known answer" even while
-    # serving NOAA reanalysis.
-    html = client.get("/").text
+    html = index()
     assert "Synthetic grid with a known answer" not in html
     assert 'id="data-source"' in html
 
 
-def test_app_js_attributes_the_data_to_its_source():
-    js = client.get("/static/app.js").text
-    assert "data-source" in js
-    assert "demo.source" in js
-
-
-def test_the_verdict_note_says_what_a_false_alarm_is():
-    # "False alarms removed" is jargon on its own: the page has to say what the
-    # naive test claimed and why the corrected test will not stand behind it.
-    js = client.get("/static/app.js").text
-    assert "raw per-pixel test calls a trend" in js
-    assert "will not stand behind" in js
-
-
-def test_flagged_cells_are_drawn_as_dots_not_filled_cells():
-    # Solid 5-degree blocks painted over the imagery; the map disappeared under
-    # them. A dot per flagged cell leaves the basemap readable.
-    js = client.get("/static/app.js").text
-    assert "L.circleMarker" in js
-    assert "maskToDataURL" not in js
-
-
-def test_only_the_contested_pixels_are_marked():
-    # Thousands of dots buried the map. The dots that matter are the ones the
-    # correction drops: those are the claims being argued about.
-    js = client.get("/static/app.js").text
-    assert "function contestedMask(demo)" in js
-    assert "drawDots(\"corrected\"" not in js
-
-
-def test_each_dot_can_be_clicked():
-    js = client.get("/static/app.js").text
-    assert 'dot.on("click"' in js
-
-
-def test_a_missed_click_snaps_to_the_nearest_dot():
-    # Clicking between dots should still land on a flagged cell, not on the
-    # grid cell under the cursor, which may not be flagged at all.
-    js = client.get("/static/app.js").text
-    assert "function nearestDot(key, latlng)" in js
-    assert "nearestDot(key, e.latlng)" in js
-
-
-def test_map_panels_are_square():
-    # The grid covers the same -180..180 / -90..90 extent as the Web Mercator
-    # world, which is square. In a wider window the image either letterboxes or
-    # gets cropped, so the panel has to be square for the raster to fill it.
-    css = client.get("/static/styles.css").text
-    assert "aspect-ratio: 1 / 1" in css
-
-
-def test_map_view_fits_the_world_exactly():
-    js = client.get("/static/app.js").text
-    # Leaflet snaps to whole zoom levels by default, which rounds a fitted view
-    # outward and leaves a margin around the raster. Fractional zoom and a
-    # zero minimum let the world fill the panel at any window width.
-    assert "zoomSnap: 0" in js
-    assert "minZoom: 0" in js
-    assert "padding: [0, 0]" in js
-
-
-def test_app_js_uses_a_keyless_basemap():
-    # CARTO's light_all now answers with a 2 KB "API KEY REQUIRED" watermark, so
-    # the panel showed grey blobs and text instead of a map. NASA GIBS serves
-    # Blue Marble tiles with no key.
-    js = client.get("/static/app.js").text
-    assert "gibs.earthdata.nasa.gov" in js
-    assert "cartocdn" not in js
-    # Blue Marble is published up to level 8; beyond that upscale the same tile
-    # instead of requesting a 404.
-    assert "maxNativeZoom" in js
-
-
-def test_app_js_clamps_overlay_bounds_to_the_world():
-    # A source in the 0..360 convention would otherwise push the overlay outside
-    # the visible map; the raster bounds must never exceed -180..180.
-    js = client.get("/static/app.js").text
-    assert "Math.max(-180" in js
-    assert "Math.min(180" in js
-
-
-def test_app_js_shows_which_source_produced_the_data():
-    # `/catalog` reports the active source's provenance; the footer is the one
-    # place that names it (the variable note stopped repeating it).
-    js = client.get("/static/app.js").text
-    assert "demo.source" in js
-    assert "data-source" in js
-
-
-def test_app_js_reports_undefined_morans_i_as_not_available():
-    # Real POWER data can leave the corrected mask empty, so `morans_i` arrives
-    # as null. `Number(null)` is 0, which would claim "no clustering" instead of
-    # "undefined"; the UI has to say so.
-    js = client.get("/static/app.js").text
-    lines = [line.strip() for line in js.splitlines()]
-    hits = [i for i, line in enumerate(lines) if "stat-morans" in line]
-    assert hits, "app.js no longer renders the Moran's I statistic"
-    block = " ".join(lines[hits[0] : hits[0] + 5])
-    assert "null" in block
-    assert "n/a" in block.lower()
-
-
-def test_app_js_zooms_to_the_data_extent():
-    # A regional source covers a small box far from the initial world view, so
-    # the map has to fit its bounds or the data is an invisible speck.
-    js = client.get("/static/app.js").text
-    assert "fitBounds" in js
-    assert "setView" not in js
-
-
-def test_app_js_charts_dates_for_a_calendar_axis():
-    # YYYYMM integers plotted directly render as "202.05k" on the axis.
-    js = client.get("/static/app.js").text
-    assert "time_labels" in js
-    assert "time_kind" in js
-
-
-def test_app_js_keeps_the_world_reachable():
-    # Clamping the view to a regional data box hides the rest of the map, so
-    # the only bounds clamp left is the initial world one.
-    js = client.get("/static/app.js").text
-    assert js.count("setMaxBounds") == 1
-
-
-def test_stylesheet_defines_the_instrument_tokens():
-    css = client.get("/static/styles.css").text
-    for token in ("--paper", "--ink-2", "--rule", "--signal", "--readout"):
+def test_stylesheet_uses_the_dark_petrol_palette():
+    css = styles()
+    for token in ("--petrol", "--ember", "--mint", "--ice", "--paper", "--glass"):
         assert token in css
-    assert "#E9EDF2" in css
+    assert "#041416" in css or "#06191d" in css.lower()
+    assert "backdrop-filter" in css
 
 
-def test_page_loads_the_three_type_roles():
-    html = client.get("/").text
-    assert "Instrument+Sans" in html
-    assert "Source+Serif+4" in html
-    assert "IBM+Plex+Mono" in html
-    assert "Space+Grotesk" not in html
+def test_the_stage_is_a_full_bleed_map_plate():
+    css = styles()
+    stage = css.split(".stage {", 1)[1].split("}", 1)[0]
+    assert "position: relative" in stage
+    assert "overflow: hidden" in stage
+    assert ".map {" in css
+    assert "position: absolute" in css.split(".map {", 1)[1].split("}", 1)[0]
+
+
+def test_the_evidence_strip_holds_the_readout_and_chart_side_by_side():
+    css = styles()
+    evidence = css.split(".evidence {", 1)[1].split("}", 1)[0]
+    assert "display: grid" in evidence
+    assert "grid-template-columns" in evidence
+    assert ".readout" in css and ".chart-panel" in css
+
+
+def test_there_is_no_faint_slope_wash_left():
+    js = app_js()
+    css = styles()
+    assert "slopeToDataURL" not in js
+    assert "SLOPE_OPACITY" not in js
+    assert "VIRIDIS" not in js
+    assert ".slope-layer" not in css
 
 
 def test_no_scientific_notation_survives_in_app_js():
-    js = client.get("/static/app.js").text
+    js = app_js()
     assert "toExponential" not in js
-    assert "fmtInt" not in js  # replaced by TDFormat.formatNumber
+    # Strip colour literals first: #63E6BE is a hex colour, not 63E6.
+    without_colours = re.sub(r"#[0-9A-Fa-f]{3,8}\b", "", js)
+    assert not re.search(r"\d[eE][+-]?\d", without_colours)
 
 
-def test_every_stat_label_names_its_unit():
-    html = client.get("/").text
-    for phrase in ("(pixels)", "(p-value)", "Moran's I", "(%)"):
-        assert phrase in html
+def test_app_js_uses_the_cell_and_raster_module():
+    js = app_js()
+    assert "TDTrend.buildRaster" in js
+    assert "TDTrend.cellAt" in js
+    assert "TDTrend.cellBounds" in js
+    assert "TDTrend.describeCell" in js
+    assert "TDTrend.fieldBounds" in js
 
 
-def test_legend_labels_both_ends_with_the_unit_and_a_zero_mark():
-    html = client.get("/").text
-    assert "slope-min" in html and "slope-max" in html and "slope-zero" in html
-    js = client.get("/static/app.js").text
-    assert "MONTHS_PER_DECADE" in js or "formatNumber" in js
+def test_app_js_builds_one_raster_per_mode_and_caches_the_urls():
+    js = app_js()
+    assert '["naive", "corrected", "dropped"]' in js
+    assert "function rasterDataUrl(" in js
+    assert "state.rasters" in js
 
 
-def test_tally_states_removed_of_flagged_not_the_raw_flag_count():
-    js = client.get("/static/app.js").text
-    assert "of" in js and "marked" in js
+def test_app_js_switches_modes_by_changing_raster_opacity():
+    js = app_js()
+    assert "function setMode(" in js
+    assert "setOpacity" in js
+    assert "aria-checked" in js
+    assert "is-ghost" in js  # the dropped pixels dissolve away
 
 
-def test_the_red_dots_have_a_visible_key():
-    html = client.get("/").text
-    assert 'class="map-key"' in html
-    assert "contested" in html.lower() or "dropped" in html.lower()
+def test_app_js_puts_counts_and_consequences_next_to_the_switch():
+    js = app_js()
+    assert "count-naive" in js and "count-corrected" in js
+    assert "dropped by the correction" in js
+    assert "No pixels dropped" in js
+    assert "0 pixels flagged" in js
+    assert 'fmt(demo.n_naive, "pixels")' in js
 
 
-def test_each_dot_answers_with_its_own_numbers_on_hover():
-    js = client.get("/static/app.js").text
-    # The dot is the whole point: it has to say which cell it is, what the
-    # trend is, and how strongly it was contested, without a click.
-    assert "bindTooltip" in js
-    assert "p_value" in js
+def test_app_js_paints_the_wing_ambient_from_the_visible_raster():
+    html = index()
+    js = app_js()
+    assert 'id="stage-ambient"' in html
+    assert "function updateAmbient(" in js
+    assert "stage-ambient" in js
+
+
+def test_the_stage_is_framed_like_an_instrument():
+    html = index()
+    css = styles()
+    assert 'class="stage-frame"' in html
+    assert ".stage-frame {" in css
+
+
+def test_app_js_updates_the_legend_for_the_visible_mode():
+    js = app_js()
+    assert "legend-min" in js and "legend-max" in js and "legend-zero" in js
     assert "per decade" in js
+    assert "legend-key-dashed" in js
+    assert "function legendEndpoint(" in js
 
 
-def test_the_variable_note_no_longer_repeats_the_source():
-    js = client.get("/static/app.js").text
-    assert "Source:" not in js  # the footer is the one place that names it
+def test_variable_chips_keep_the_catalogue_unit_case():
+    css = styles()
+    unit = css.split(".variable__unit {", 1)[1].split("}", 1)[0]
+    assert "text-transform: none" in unit
 
 
-def test_a_default_cell_is_selected_after_the_analysis_lands():
-    js = client.get("/static/app.js").text
-    assert "function defaultCell(" in js
-    assert "defaultCell(" in js.split("function renderDemo")[1]
+def test_the_hud_stacks_below_the_map_on_phones():
+    css = styles()
+    block = css.split("@media (max-width: 740px)", 1)[1].split("@media (max-width: 480px)", 1)[0]
+    stage = block.split(".stage {", 1)[1].split("}", 1)[0]
+    assert "height: auto" in stage
+    legend = block.split(".hud--legend {", 1)[1].split("}", 1)[0]
+    assert "position: relative" in legend
+    switch = block.split(".switch-wrap {", 1)[1].split("}", 1)[0]
+    assert "position: relative" in switch
 
 
-def test_chart_titles_its_axis_with_units_and_draws_the_trend():
-    js = client.get("/static/app.js").text
-    assert "function drawChart(body, units" in js  # units flow into the axis
-    assert "yaxis" in js and "title" in js
-    assert "trendMonthly" in js  # the fitted line is drawn
-    assert "toExponential" not in js
+def test_app_js_outlines_the_selected_cell_as_an_area():
+    js = app_js()
+    assert "L.rectangle" in js
+    assert "cellBounds(cell.i, cell.j" in js
+    assert "cell-select" in js
+    assert "L.circleMarker" not in js  # the old dot is gone
 
 
-def test_the_chart_can_be_resized_and_the_height_persists():
-    html = client.get("/").text
-    assert "chart-grip" in html
-    js = client.get("/static/app.js").text
-    assert "td.chartHeight" in js
-    assert "Plots.resize" in js
-    # The separator reports its current size to assistive tech, not a constant.
-    assert "aria-valuenow" in js
+def test_app_js_snaps_any_click_to_the_nearest_cell():
+    js = app_js()
+    assert 'map.on("click"' in js
+    assert "TDTrend.cellAt(e.latlng.lat, e.latlng.lng" in js
 
 
-def test_the_slope_ramp_uses_the_clipped_range_helper():
-    js = client.get("/static/app.js").text
-    assert "slopeRange" in js  # not a bare min-max scan
+def test_app_js_reports_trend_p_value_and_both_verdicts():
+    js = app_js()
+    assert "cell-trend" in js
+    assert "cell-p" in js
+    assert "Flagged by both tests" in js
+    assert "Naive flag, dropped by the correction" in js
+    assert "Not flagged by either test" in js
+    assert "Naive · flagged" in js and "Corrected · flagged" in js
 
 
-def test_the_selection_is_kept_in_the_url():
-    js = client.get("/static/app.js").text
+def test_app_js_keeps_a_missing_slope_readable():
+    js = app_js()
+    assert "trend n/a" in js
+    assert "p n/a" in js
+
+
+def test_app_js_has_a_hover_loupe_and_crosshair():
+    js = app_js()
+    assert "loupe-coords" in js
+    assert "loupe-trend" in js
+    assert "crosshair" in js
+    assert 'map.on("mousemove"' in js
+
+
+def test_app_js_hides_the_hover_loupe_when_a_cell_is_selected():
+    js = app_js()
+    block = js.split("function selectCell(", 1)[1].split("function selectCellAt", 1)[0]
+    assert "hideLoupe()" in block
+
+
+def test_app_js_pluralises_the_fingerprint_summary():
+    js = app_js()
+    assert "regions resemble" in js
+    assert "region resembles" in js
+    assert "DRIVER_NAMES" in js
+
+
+def test_app_js_charts_through_the_chart_module():
+    js = app_js()
+    assert "TDChart.traces(" in js
+    assert "TDChart.layout(" in js
+    assert "TDChart.CONFIG" in js
+    assert 'Plotly.react("chart"' in js
+    assert "chart-reset" in js
+    assert "autorange" in js
+
+
+def test_app_js_keeps_the_selection_in_the_url_including_mode():
+    js = app_js()
     assert "history.replaceState" in js
     assert "URLSearchParams" in js
+    assert 'params.set("variable"' in js
+    assert 'params.set("mode"' in js
+    assert 'params.set("lat"' in js
 
 
-def test_a_cold_analysis_shows_progress_rather_than_a_blank_map():
-    js = client.get("/static/app.js").text
+def test_app_js_supports_keyboard_selection_and_zoom():
+    js = app_js()
+    for key in ("ArrowRight", "ArrowLeft", "ArrowUp", "ArrowDown", "Enter"):
+        assert key in js
+    assert "zoomIn" in js and "zoomOut" in js
+    assert "keyboard: false" in js  # our handler owns the arrow keys
+
+
+def test_app_js_draws_a_graticule_and_scales_the_map():
+    js = app_js()
+    assert "graticule" in js
+    assert "L.control.scale" in js
+    assert "L.control.zoom" in js
+
+
+def test_app_js_uses_a_keyless_basemap_with_a_native_zoom_cap():
+    js = app_js()
+    assert "gibs.earthdata.nasa.gov" in js
+    assert "maxNativeZoom" in js
+    assert "cartocdn" not in js
+
+
+def test_app_js_takes_the_field_bounds_from_the_raster_module():
+    # One source for the box: the overlay, the border, the fitBounds and the
+    # per-pixel longitude all read the same bounds, so the painted cells and
+    # the selection rectangle cannot separate.
+    js = app_js()
+    assert "TDProjection.MAX_LAT" in js
+    assert "TDTrend.fieldBounds" in js
+    assert "L.imageOverlay(entry.url, state.bounds" in js
+    assert "TDTrend.buildRaster(demo, mode, height, rows, state.bounds)" in js
+
+
+def test_app_js_shows_the_source_and_diagnostics_under_method():
+    js = app_js()
+    assert "demo.source" in js
+    assert "data-source" in js
+    assert "method-cutoff" in js
+    assert "method-coverage" in js
+    assert "method-morans" in js
+    assert "method-grid" in js
+
+
+def test_app_js_reports_undefined_morans_i_as_not_available():
+    js = app_js()
+    lines = [line.strip() for line in js.splitlines()]
+    hits = [i for i, line in enumerate(lines) if "method-morans" in line]
+    assert hits, "app.js no longer renders the Moran's I statistic"
+    block = " ".join(lines[hits[0] : hits[0] + 6])
+    assert "null" in block or "Number.isFinite" in block
+    assert "n/a" in block.lower()
+
+
+def test_app_js_opens_the_method_dialog():
+    js = app_js()
+    assert "showModal" in js
+    assert "method-open" in js
+
+
+def test_app_js_shows_loading_progress_and_a_delayed_cold_run_note():
+    js = app_js()
     assert "function setBusy(" in js
-    assert "first run" in js.lower()
+    assert "busy-note" in js
+    # The copy lives in the markup; the script only reveals it after a slow load.
+    assert "First run can take about 10 minutes" in index()
 
 
-def test_the_most_contested_cells_are_listed_and_clickable():
-    html = client.get("/").text
-    assert "contested-list" in html
-    js = client.get("/static/app.js").text
-    assert "function topContested(" in js
-    assert "map.flyTo" in js
-
-
-def test_arrow_keys_step_through_contested_cells():
-    js = client.get("/static/app.js").text
-    assert "ArrowRight" in js and "ArrowLeft" in js
-
-
-def test_stats_are_one_ruled_panel_not_a_card_grid():
-    css = client.get("/static/styles.css").text
-    assert "border-radius" not in css.split(".stat {")[1].split("}")[0]
-
-
-def test_the_map_windows_read_as_instrument_faces():
-    html = client.get("/").text
-    assert "map-frame" in html or "registration" in html.lower()
-
-
-def test_the_masthead_carries_a_warming_stripe_band_with_a_fallback():
-    js = client.get("/static/app.js").text
-    assert "stripe" in js.lower()
+def test_app_js_renders_the_warming_stripes_from_the_payload():
+    js = app_js()
     assert "function renderStripes(" in js
+    assert "annual_anomaly" in js
+    assert "stripe-band" in js
 
 
-def test_the_square_map_rule_survives_the_restyle():
-    css = client.get("/static/styles.css").text
-    assert "aspect-ratio: 1 / 1" in css
+def test_app_js_fingerprint_mode_uses_the_one_map():
+    js = app_js()
+    assert "function nearestRegion(" in js
+    assert "fingerprint-panel" in js
+    assert "fingerprint-list" in js
+    assert "map-naive" not in js
 
 
-def test_fingerprint_mode_outlines_matched_regions_and_polls_progress():
-    js = client.get("/static/app.js").text
-    assert "fingerprint" in js.lower()
-    assert "region_rings" in js or "rings" in js
-    assert "progress" in js
+def test_app_js_reports_an_empty_corrected_field_as_valid():
+    js = app_js()
+    assert "n_corrected" in js
+    assert "0 pixels flagged" in js
+    assert "empty" in js
 
 
-def test_fingerprint_mode_clicks_snap_to_a_region_centroid():
-    js = client.get("/static/app.js").text
-    assert "nearestRegion" in js
+def test_the_legend_names_both_outline_states():
+    html = index()
+    assert "survives correction" in html
+    assert "dropped by correction" in html
+    assert "legend-key-dashed" in html
 
 
-def test_the_slope_raster_is_warped_into_mercator():
-    # Equal-latitude rows are not equal on screen: on a Mercator map 60N sits
-    # far higher than its row index suggests, so the raster has to be sampled
-    # through the projection or continents drift into the sea.
-    js = client.get("/static/app.js").text
-    assert "mercatorRows" in js
-    assert "projection.js" in client.get("/").text
-    assert client.get("/static/projection.js").status_code == 200
+def test_the_page_has_a_skip_link_to_the_map():
+    html = index()
+    assert 'class="skip"' in html
+    assert 'href="#stage"' in html
 
 
-def test_the_slope_raster_is_not_smoothed_into_a_halo():
-    # Bilinear upscaling of a 37-row image blurred coastline colour into the
-    # ocean. Only the raster gets nearest-neighbour; satellite tiles must not.
-    js = client.get("/static/app.js").text
-    assert 'className: "slope-layer"' in js
-    css = client.get("/static/styles.css").text
-    assert "image-rendering: pixelated" in css
-    assert ".slope-layer" in css
+def test_reduced_motion_is_respected():
+    css = styles()
+    assert "prefers-reduced-motion" in css
+    assert "animation: none" in css or "transition: none" in css

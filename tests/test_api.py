@@ -5,8 +5,23 @@ from fastapi.testclient import TestClient
 
 from trend_detective.api import app as app_module
 from trend_detective.api.app import app
+from trend_detective.data import analysis_cache
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _analysis_cache_in_tmp(monkeypatch, tmp_path):
+    """Keep the persisted-analysis cache out of the repo's ``data/cache``.
+
+    The cry-wolf body is disk-backed, so a test that swaps ``_SOURCE`` (the flat
+    source, say) would otherwise be served the real cached body for a different
+    data source. Redirecting the cache root makes every API test hermetic.
+    """
+    monkeypatch.setattr(analysis_cache, "CACHE_DIR", tmp_path / "cache-root")
+    app_module._demo_body.cache_clear()
+    yield
+    app_module._demo_body.cache_clear()
 
 
 class _FlatSource:
@@ -330,6 +345,82 @@ def test_fingerprint_ready_payload_lists_reference_and_matches(monkeypatch):
     assert set(body["matches"][0]["contribution"]) == set(body["kept"])
 
 
+def test_fingerprint_survives_variables_on_two_different_grids(monkeypatch):
+    # A source can mix grids (PSL used to: surface_temperature on 2.5 degrees,
+    # every other variable on T62). A variable that cannot align with the
+    # selected patches must be skipped, not crash the build with a
+    # boolean-index error.
+    labels = np.array([[1, 1], [2, 2]])
+    slopes = {
+        "a": np.array([[1.0, 3.0], [5.0, 7.0]]),
+        "b": np.array([[10.0, 20.0], [30.0, 40.0]]),
+        "c": np.zeros((3, 5)),  # a field on a different grid
+    }
+    key = ("a", ("a", "b", "c"))
+    grid = xr.DataArray(
+        np.zeros((24, 2, 2)),
+        dims=("time", "lat", "lon"),
+        coords={"time": np.arange(24), "lat": [0.0, -1.0], "lon": [0.0, 1.0]},
+    )
+    monkeypatch.setattr(app_module, "_served_variables", lambda: ["a", "b", "c"])
+    monkeypatch.setattr(app_module, "_region_labels", lambda v: (labels, None))
+    monkeypatch.setattr(app_module, "_slope_grid", lambda v: slopes[v])
+
+    def fake_grid(variable):
+        return grid
+
+    fake_grid.cache_clear = lambda: None
+    monkeypatch.setattr(app_module, "_demo_grid", fake_grid)
+
+    with app_module._FP_LOCK:
+        app_module._FP_STATE.clear()
+        app_module._FP_STATE.update(
+            key=key, status="preparing", reason=None, progress={"done": 0, "total": 3}
+        )
+    app_module._fingerprint_refresh(key, "a", ["a", "b", "c"], labels)
+
+    with app_module._FP_LOCK:
+        assert app_module._FP_STATE["status"] == "ready"
+        assert app_module._FP_STATE["variables"] == ["a", "b", "c"]
+        app_module._FP_STATE.clear()
+
+
+def test_build_refuses_patches_that_do_not_match_the_grid(monkeypatch):
+    # A body cached from an older dataset can carry a different grid than the
+    # live one (surface_temperature used to be 37x72). Rather than crash with a
+    # boolean-index error deep in the vector step, say the cache is stale.
+    labels = np.zeros((3, 5), dtype=int)
+    labels[0, 0] = 1
+    labels[1, 2] = 2
+    key = ("a", ("a", "b"))
+    grid = xr.DataArray(
+        np.zeros((24, 2, 2)),
+        dims=("time", "lat", "lon"),
+        coords={"time": np.arange(24), "lat": [0.0, -1.0], "lon": [0.0, 1.0]},
+    )
+    monkeypatch.setattr(app_module, "_served_variables", lambda: ["a", "b"])
+    monkeypatch.setattr(app_module, "_slope_grid", lambda v: np.ones((2, 2)))
+
+    def fake_grid(variable):
+        return grid
+
+    fake_grid.cache_clear = lambda: None
+    monkeypatch.setattr(app_module, "_demo_grid", fake_grid)
+
+    with app_module._FP_LOCK:
+        app_module._FP_STATE.clear()
+        app_module._FP_STATE.update(
+            key=key, status="preparing", reason=None, progress={"done": 0, "total": 2}
+        )
+    app_module._fingerprint_refresh(key, "a", ["a", "b"], labels)
+
+    with app_module._FP_LOCK:
+        assert app_module._FP_STATE["status"] == "unavailable"
+        reason = app_module._FP_STATE["reason"]
+        assert "grid" in reason and "cache" in reason
+        app_module._FP_STATE.clear()
+
+
 def test_a_failed_fingerprint_build_reports_unavailable_not_preparing_forever(monkeypatch):
     # A build that raises must not strand the UI on "preparing 2 of 2".
     labels = np.array([[1, 1], [2, 2]])
@@ -445,3 +536,39 @@ def test_the_stripe_band_weights_polar_rows_less():
     # The cos-weighted spread is ~1.48; the flat equal-row mean would give 5.0.
     assert abs(spread - 1.479) < 0.05
     assert abs(sum(out)) < 1e-9
+
+
+def test_a_body_keyed_only_by_the_configured_source_is_not_served(flat_source):
+    # The historical hole: a body written under the configured name (``psl``)
+    # while a different source was actually serving. The app must key on the
+    # resolved source, so this foreign body is ignored and the live source
+    # recomputes instead of showing foreign numbers.
+    legacy = analysis_cache.signature_of()
+    analysis_cache.save(
+        "surface_temperature",
+        {"variable": "surface_temperature", "n_naive": 999},
+        signature=legacy,
+    )
+    body = app_module._demo_body("surface_temperature")
+    assert body["n_naive"] == 0  # the flat source has no significant pixels
+
+
+def test_a_disk_cached_body_is_served_without_recomputing(monkeypatch):
+    # The analysis is minutes on a cold run; a persisted body must be reused so
+    # a server restart does not re-pay it. If the pipeline runs at all, fail.
+    # The autouse fixture has redirected the cache to a temp dir, so saving with
+    # the default root is what the app will read back.
+    body = {"variable": "soil_moisture_rootzone", "n_naive": 1, "units": "kg m-2"}
+    analysis_cache.save(
+        "soil_moisture_rootzone", body, signature=app_module._analysis_signature()
+    )
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("recomputed despite a disk-cached body")
+
+    monkeypatch.setattr(app_module.pipeline, "cry_wolf", boom)
+    app_module._demo_body.cache_clear()
+    try:
+        assert app_module._demo_body("soil_moisture_rootzone") == body
+    finally:
+        app_module._demo_body.cache_clear()

@@ -106,6 +106,25 @@ def test_extract_grid_returns_a_time_lat_lon_array():
     assert da.name == "value"
 
 
+def test_extract_grid_converts_temperature_to_catalog_units():
+    # The Gaussian file stores kelvin, the catalog reports degC: the boundary
+    # conversion must happen here so nothing downstream sees kelvin.
+    ds = xr.Dataset(
+        {"air": (("time", "lat", "lon"), np.full((1, 2, 2), 300.0))},
+        coords={
+            "time": np.arange("2000-01", "2000-02", dtype="datetime64[M]"),
+            "lat": np.array([90.0, -90.0]),
+            "lon": np.array([0.0, 180.0]),
+        },
+        attrs={},
+    )
+
+    da = psl.extract_grid(ds, "air")
+
+    assert np.allclose(da.values, 26.85)  # 300 K = 26.85 degC
+    assert da.attrs["units"] == "degC"
+
+
 def test_extract_grid_sorts_lat_north_up():
     da = psl.extract_grid(_dataset(), "air")
 
@@ -201,7 +220,7 @@ def test_load_asks_the_cache_for_the_configured_years():
 
     url, = fetcher.calls
     assert "time_start=2000-01-01" in url and "time_end=2002-12-31" in url
-    assert fetcher.kwargs[0]["name"] == "air.mon.mean.2000-2002.s1.nc"
+    assert fetcher.kwargs[0]["name"] == "air.2m.mon.mean.2000-2002.s1.nc"
 
 
 def test_chunks_cover_the_range_once_without_gaps():
@@ -233,9 +252,9 @@ def test_a_long_range_is_fetched_as_separate_cached_chunks():
     assert starts == ["1980", "1985", "1990"]
     assert ends == ["1984", "1989", "1994"]
     assert [kw["name"] for kw in fetcher.kwargs] == [
-        "air.mon.mean.1980-1984.s1.nc",
-        "air.mon.mean.1985-1989.s1.nc",
-        "air.mon.mean.1990-1994.s1.nc",
+        "air.2m.mon.mean.1980-1984.s1.nc",
+        "air.2m.mon.mean.1985-1989.s1.nc",
+        "air.2m.mon.mean.1990-1994.s1.nc",
     ]
 
 
@@ -355,7 +374,20 @@ def test_psl_serves_every_catalog_variable():
     ]
 
 
+def test_every_psl_variable_reads_a_file_on_the_same_gaussian_grid():
+    # The trend fingerprint compares every variable at one pixel, so all five
+    # must share a grid. ``surface/air.mon.mean.nc`` is a 2.5 deg grid; the
+    # ``surface_gauss`` files are T62. Reading temperature from
+    # ``surface_gauss`` also gives the true 2 m field instead of the 0.995
+    # sigma level, which is what the catalog's "near-surface" label means.
+    paths = [path for path, _name in psl.DATASETS.values()]
+    assert all("/surface_gauss/" in path for path in paths)
+
+
 def test_datasets_rows_point_at_the_probed_files():
+    assert psl.DATASETS["surface_temperature"][0].endswith(
+        "surface_gauss/air.2m.mon.mean.nc"
+    )
     assert psl.DATASETS["precipitation"][0].endswith("prate.sfc.mon.mean.nc")
     assert psl.DATASETS["soil_moisture_rootzone"][0].endswith(
         "soilw.10-200cm.mon.mean.nc"
