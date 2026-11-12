@@ -5,8 +5,23 @@ from fastapi.testclient import TestClient
 
 from trend_detective.api import app as app_module
 from trend_detective.api.app import app
+from trend_detective.data import analysis_cache
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _analysis_cache_in_tmp(monkeypatch, tmp_path):
+    """Keep the persisted-analysis cache out of the repo's ``data/cache``.
+
+    The cry-wolf body is disk-backed, so a test that swaps ``_SOURCE`` (the flat
+    source, say) would otherwise be served the real cached body for a different
+    data source. Redirecting the cache root makes every API test hermetic.
+    """
+    monkeypatch.setattr(analysis_cache, "CACHE_DIR", tmp_path / "cache-root")
+    app_module._demo_body.cache_clear()
+    yield
+    app_module._demo_body.cache_clear()
 
 
 class _FlatSource:
@@ -57,6 +72,38 @@ def precip_only_source(monkeypatch):
     app_module._demo_body.cache_clear()
 
 
+class _CalendarSource:
+    """A source on a real calendar axis, like the live POWER source."""
+
+    def variables(self) -> list[str]:
+        return ["surface_temperature"]
+
+    def load(self, variable: str) -> xr.DataArray:
+        months = np.arange(24)
+        stamps = 202001 + (months // 12) * 100 + (months % 12)
+        return xr.DataArray(
+            np.zeros((24, 3, 3), dtype=float),
+            dims=("time", "lat", "lon"),
+            coords={
+                "time": stamps,
+                "lat": np.linspace(1.0, -1.0, 3),
+                "lon": np.linspace(-1.0, 1.0, 3),
+            },
+            name="value",
+            attrs={"variable": variable, "time_kind": "calendar"},
+        )
+
+
+@pytest.fixture
+def calendar_source(monkeypatch):
+    monkeypatch.setattr(app_module, "_SOURCE", _CalendarSource())
+    app_module._demo_grid.cache_clear()
+    app_module._demo_body.cache_clear()
+    yield
+    app_module._demo_grid.cache_clear()
+    app_module._demo_body.cache_clear()
+
+
 def test_catalog_endpoint():
     r = client.get("/catalog")
     assert r.status_code == 200 and isinstance(r.json(), list) and r.json()
@@ -98,6 +145,88 @@ def test_demo_endpoint_shape():
     assert len(body["naive_mask"][0]) == len(body["lon"])
 
 
+def test_demo_exposes_a_per_pixel_p_value_grid_for_the_hover_readout():
+    body = client.get("/demo/soil_moisture_rootzone").json()
+
+    assert len(body["p_value"]) == len(body["lat"])
+    assert len(body["p_value"][0]) == len(body["lon"])
+    # The dots exist to be inspected, so at least one contested cell must carry
+    # a readable number rather than null everywhere.
+    contested = [
+        (i, j)
+        for i, row in enumerate(body["naive_mask"])
+        for j, flagged in enumerate(row)
+        if flagged
+    ]
+    assert contested
+    assert any(body["p_value"][i][j] is not None for i, j in contested)
+
+
+def test_demo_carries_the_annual_anomaly_for_the_stripe_band():
+    body = client.get("/demo/soil_moisture_rootzone").json()
+    anomaly = body["annual_anomaly"]
+
+    assert anomaly  # a record long enough to have years
+    finite = [v for v in anomaly if v is not None]
+    assert finite
+    assert abs(sum(finite) / len(finite)) < 1e-6  # anomalies centre on zero
+
+
+def test_catalog_reports_the_active_source_not_the_nominal_product(monkeypatch):
+    # The catalog names the product we would ideally use (GLDAS etc.). Serving
+    # a different source under that label is false attribution.
+    class GreenSource:
+        def variables(self):
+            return ["surface_temperature"]
+
+        def provenance(self, variable):
+            return "GREEN-1 sample"
+
+        def load(self, variable):
+            return _FlatSource().load(variable)
+
+    monkeypatch.setattr(app_module, "_SOURCE", GreenSource())
+    app_module._demo_grid.cache_clear()
+    app_module._demo_body.cache_clear()
+
+    try:
+        entry = client.get("/catalog").json()[0]
+    finally:
+        app_module._demo_grid.cache_clear()
+        app_module._demo_body.cache_clear()
+
+    assert entry["source"] == "GREEN-1 sample"
+
+
+def test_catalog_falls_back_to_the_nominal_product_when_undeclared(monkeypatch):
+    # A source that says nothing about provenance keeps the catalog's nominal
+    # product rather than reporting an empty string.
+    class Bare:
+        def variables(self):
+            return ["precipitation"]
+
+        def load(self, variable):
+            return _FlatSource().load(variable)
+
+    monkeypatch.setattr(app_module, "_SOURCE", Bare())
+    app_module._demo_grid.cache_clear()
+    app_module._demo_body.cache_clear()
+
+    try:
+        entry = client.get("/catalog").json()[0]
+    finally:
+        app_module._demo_grid.cache_clear()
+        app_module._demo_body.cache_clear()
+
+    assert entry["source"] == "GPM / MERRA-2"
+
+
+def test_demo_reports_the_source_that_produced_the_numbers():
+    body = client.get("/demo/surface_temperature").json()
+
+    assert "synthetic" in body["source"].lower()
+
+
 def test_demo_unknown_variable_404():
     assert client.get("/demo/nope").status_code == 404
 
@@ -119,6 +248,23 @@ def test_timeseries_unknown_variable_404():
     assert client.get("/timeseries/nope?lat=0&lon=0").status_code == 404
 
 
+def test_timeseries_labels_a_calendar_axis_with_dates(calendar_source):
+    # YYYYMM integers plotted as numbers render as "202.05k" on a chart axis.
+    body = client.get("/timeseries/surface_temperature?lat=0&lon=0").json()
+
+    assert body["time_kind"] == "calendar"
+    assert body["time_labels"][:3] == ["2020-01-01", "2020-02-01", "2020-03-01"]
+    assert body["time_labels"][-1] == "2021-12-01"
+
+
+def test_timeseries_labels_an_index_axis_as_month_numbers():
+    body = client.get("/timeseries/soil_moisture_rootzone?lat=0&lon=0").json()
+
+    assert body["time_kind"] == "index"
+    assert body["time_labels"][:3] == ["0", "1", "2"]
+    assert len(body["time_labels"]) == len(body["time"])
+
+
 def test_index_served():
     r = client.get("/")
     assert r.status_code == 200 and "text/html" in r.headers["content-type"]
@@ -137,3 +283,292 @@ def test_demo_serialises_undefined_diagnostics_as_null(flat_source):
     assert body["threshold"] == 0.0
     assert body["n_naive"] == 0
     assert body["n_corrected"] == 0
+
+
+def test_fingerprint_reports_unavailable_with_one_variable(monkeypatch):
+    monkeypatch.setattr(app_module, "_served_variables", lambda: ["surface_temperature"])
+    r = client.get("/fingerprint/surface_temperature?lat=0&lon=0&k=3")
+    assert r.status_code == 200
+    assert r.json()["status"] == "unavailable"
+
+
+def test_fingerprint_says_so_when_there_are_no_regions(monkeypatch):
+    # Review Focus 1: precipitation can correct to an empty patch set.
+    monkeypatch.setattr(app_module, "_served_variables", lambda: ["a", "b"])
+    monkeypatch.setattr(
+        app_module,
+        "_region_labels",
+        lambda v: (None, "no corrected patches for this variable"),
+    )
+    r = client.get("/fingerprint/a?lat=0&lon=0&k=3")
+    assert r.json()["status"] in {"preparing", "ready"}
+    assert r.json()["reason"] and "patch" in r.json()["reason"].lower()
+
+
+def test_fingerprint_ready_payload_lists_reference_and_matches(monkeypatch):
+    labels = np.array([[1, 1, 0], [0, 0, 2]])
+    slopes = {
+        "a": np.array([[1.0, 3.0, 0.0], [0.0, 0.0, 8.0]]),
+        "b": np.array([[10.0, 20.0, 0.0], [0.0, 0.0, 50.0]]),
+    }
+    grid = xr.DataArray(
+        np.zeros((24, 2, 3)),
+        dims=("time", "lat", "lon"),
+        coords={"time": np.arange(24), "lat": [0.0, -1.0], "lon": [0.0, 1.0, 2.0]},
+    )
+    monkeypatch.setattr(app_module, "_served_variables", lambda: ["a", "b"])
+    monkeypatch.setattr(app_module, "_region_labels", lambda v: (labels, None))
+
+    def fake_grid(variable):
+        return grid
+
+    fake_grid.cache_clear = lambda: None
+    monkeypatch.setattr(app_module, "_demo_grid", fake_grid)
+    monkeypatch.setattr(app_module, "_slope_grid", lambda v: slopes[v])
+    monkeypatch.setattr(
+        app_module,
+        "_start_fingerprint_thread",
+        lambda *args: app_module._fingerprint_refresh(*args),
+    )
+    r = client.get("/fingerprint/a?lat=0&lon=0&k=1")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "ready"
+    assert body["reference"]["region_id"] == 1
+    assert body["matches"][0]["region_id"] == 2
+    assert body["matches"][0]["rings"]  # an outline travels with the match
+    assert {r["region_id"] for r in body["regions"]} == {1, 2}
+    # "Matched mainly on drying and weak warming" has to be derivable from the
+    # response, so a match carries the same standardized vector as the
+    # reference plus each variable's signed contribution to the distance.
+    assert set(body["matches"][0]["standardized"]) == set(body["kept"])
+    assert set(body["matches"][0]["contribution"]) == set(body["kept"])
+
+
+def test_fingerprint_survives_variables_on_two_different_grids(monkeypatch):
+    # A source can mix grids (PSL used to: surface_temperature on 2.5 degrees,
+    # every other variable on T62). A variable that cannot align with the
+    # selected patches must be skipped, not crash the build with a
+    # boolean-index error.
+    labels = np.array([[1, 1], [2, 2]])
+    slopes = {
+        "a": np.array([[1.0, 3.0], [5.0, 7.0]]),
+        "b": np.array([[10.0, 20.0], [30.0, 40.0]]),
+        "c": np.zeros((3, 5)),  # a field on a different grid
+    }
+    key = ("a", ("a", "b", "c"))
+    grid = xr.DataArray(
+        np.zeros((24, 2, 2)),
+        dims=("time", "lat", "lon"),
+        coords={"time": np.arange(24), "lat": [0.0, -1.0], "lon": [0.0, 1.0]},
+    )
+    monkeypatch.setattr(app_module, "_served_variables", lambda: ["a", "b", "c"])
+    monkeypatch.setattr(app_module, "_region_labels", lambda v: (labels, None))
+    monkeypatch.setattr(app_module, "_slope_grid", lambda v: slopes[v])
+
+    def fake_grid(variable):
+        return grid
+
+    fake_grid.cache_clear = lambda: None
+    monkeypatch.setattr(app_module, "_demo_grid", fake_grid)
+
+    with app_module._FP_LOCK:
+        app_module._FP_STATE.clear()
+        app_module._FP_STATE.update(
+            key=key, status="preparing", reason=None, progress={"done": 0, "total": 3}
+        )
+    app_module._fingerprint_refresh(key, "a", ["a", "b", "c"], labels)
+
+    with app_module._FP_LOCK:
+        assert app_module._FP_STATE["status"] == "ready"
+        assert app_module._FP_STATE["variables"] == ["a", "b", "c"]
+        app_module._FP_STATE.clear()
+
+
+def test_build_refuses_patches_that_do_not_match_the_grid(monkeypatch):
+    # A body cached from an older dataset can carry a different grid than the
+    # live one (surface_temperature used to be 37x72). Rather than crash with a
+    # boolean-index error deep in the vector step, say the cache is stale.
+    labels = np.zeros((3, 5), dtype=int)
+    labels[0, 0] = 1
+    labels[1, 2] = 2
+    key = ("a", ("a", "b"))
+    grid = xr.DataArray(
+        np.zeros((24, 2, 2)),
+        dims=("time", "lat", "lon"),
+        coords={"time": np.arange(24), "lat": [0.0, -1.0], "lon": [0.0, 1.0]},
+    )
+    monkeypatch.setattr(app_module, "_served_variables", lambda: ["a", "b"])
+    monkeypatch.setattr(app_module, "_slope_grid", lambda v: np.ones((2, 2)))
+
+    def fake_grid(variable):
+        return grid
+
+    fake_grid.cache_clear = lambda: None
+    monkeypatch.setattr(app_module, "_demo_grid", fake_grid)
+
+    with app_module._FP_LOCK:
+        app_module._FP_STATE.clear()
+        app_module._FP_STATE.update(
+            key=key, status="preparing", reason=None, progress={"done": 0, "total": 2}
+        )
+    app_module._fingerprint_refresh(key, "a", ["a", "b"], labels)
+
+    with app_module._FP_LOCK:
+        assert app_module._FP_STATE["status"] == "unavailable"
+        reason = app_module._FP_STATE["reason"]
+        assert "grid" in reason and "cache" in reason
+        app_module._FP_STATE.clear()
+
+
+def test_a_failed_fingerprint_build_reports_unavailable_not_preparing_forever(monkeypatch):
+    # A build that raises must not strand the UI on "preparing 2 of 2".
+    labels = np.array([[1, 1], [2, 2]])
+    key = ("a", ("a", "b"))
+    monkeypatch.setattr(app_module, "_served_variables", lambda: ["a", "b"])
+    monkeypatch.setattr(app_module, "_region_labels", lambda v: (labels, None))
+
+    def exploding_grid(variable):
+        raise RuntimeError("download failed")
+
+    exploding_grid.cache_clear = lambda: None
+    monkeypatch.setattr(app_module, "_demo_grid", exploding_grid)
+
+    with app_module._FP_LOCK:
+        app_module._FP_STATE.clear()
+        app_module._FP_STATE.update(
+            key=key, status="preparing", reason=None, progress={"done": 0, "total": 2}
+        )
+    app_module._fingerprint_refresh(key, "a", ["a", "b"], labels)
+
+    with app_module._FP_LOCK:
+        assert app_module._FP_STATE["status"] == "unavailable"
+        assert app_module._FP_STATE.get("reason")
+        app_module._FP_STATE.clear()
+
+
+def test_fingerprint_is_unavailable_when_under_two_variables_survive(monkeypatch):
+    # Two constant-across-regions variables both standardize away; matching on
+    # zero or one axis is not a fingerprint, so the build must say so instead of
+    # reporting every region as a distance-0 twin.
+    labels = np.array([[1, 1], [2, 2]])
+    flat = np.array([[5.0, 5.0], [5.0, 5.0]])
+    slopes = {"a": flat, "b": flat.copy()}
+    key = ("a", ("a", "b"))
+    monkeypatch.setattr(app_module, "_served_variables", lambda: ["a", "b"])
+    monkeypatch.setattr(app_module, "_region_labels", lambda v: (labels, None))
+    monkeypatch.setattr(app_module, "_slope_grid", lambda v: slopes[v])
+
+    grid = xr.DataArray(
+        np.zeros((24, 2, 2)),
+        dims=("time", "lat", "lon"),
+        coords={"time": np.arange(24), "lat": [0.0, -1.0], "lon": [0.0, 1.0]},
+    )
+
+    def fake_grid(variable):
+        return grid
+
+    fake_grid.cache_clear = lambda: None
+    monkeypatch.setattr(app_module, "_demo_grid", fake_grid)
+
+    with app_module._FP_LOCK:
+        app_module._FP_STATE.clear()
+        app_module._FP_STATE.update(
+            key=key, status="preparing", reason=None, progress={"done": 0, "total": 2}
+        )
+    app_module._fingerprint_refresh(key, "a", ["a", "b"], labels)
+
+    with app_module._FP_LOCK:
+        assert app_module._FP_STATE["status"] == "unavailable"
+        assert "two variables" in app_module._FP_STATE["reason"]
+        app_module._FP_STATE.clear()
+
+
+def test_a_concurrent_variable_switch_does_not_leak_another_payload(monkeypatch):
+    # Request A is starting its build; before it re-reads the shared state,
+    # request B for a different variable replaces it. A must report that its own
+    # build is preparing, never B's ready payload.
+    labels = np.array([[1, 1], [2, 2]])
+    monkeypatch.setattr(app_module, "_served_variables", lambda: ["a", "b"])
+    monkeypatch.setattr(app_module, "_region_labels", lambda v: (labels, None))
+
+    def fake_grid(variable):
+        raise AssertionError("this build must not run")
+
+    fake_grid.cache_clear = lambda: None
+    monkeypatch.setattr(app_module, "_demo_grid", fake_grid)
+
+    def switch_under_us(key, selected, served, labels_):
+        with app_module._FP_LOCK:
+            app_module._FP_STATE.clear()
+            app_module._FP_STATE.update(
+                key=("other", ("a", "b")),
+                status="ready",
+                reason=None,
+                progress={"done": 2, "total": 2},
+            )
+
+    monkeypatch.setattr(app_module, "_start_fingerprint_thread", switch_under_us)
+
+    with app_module._FP_LOCK:
+        app_module._FP_STATE.clear()
+    r = client.get("/fingerprint/a?lat=0&lon=0&k=1")
+    body = r.json()
+    assert body["status"] == "preparing"
+    assert body["reference"] is None
+    with app_module._FP_LOCK:
+        app_module._FP_STATE.clear()
+
+
+def test_the_stripe_band_weights_polar_rows_less():
+    # A global mean that weights every grid row equally over-counts the poles,
+    # where a cell covers far less surface; weight by cos(latitude) instead.
+    values = np.zeros((24, 2, 1))
+    values[0:12, 0, 0] = 10.0  # polar row, year 0
+    values[12:24, 0, 0] = 20.0  # polar row, year 1
+    da = xr.DataArray(
+        values,
+        dims=("time", "lat", "lon"),
+        coords={"time": np.arange(24), "lat": [80.0, 0.0], "lon": [0.0]},
+    )
+    out = app_module._annual_anomaly(da)
+    spread = max(out) - min(out)
+    # The cos-weighted spread is ~1.48; the flat equal-row mean would give 5.0.
+    assert abs(spread - 1.479) < 0.05
+    assert abs(sum(out)) < 1e-9
+
+
+def test_a_body_keyed_only_by_the_configured_source_is_not_served(flat_source):
+    # The historical hole: a body written under the configured name (``psl``)
+    # while a different source was actually serving. The app must key on the
+    # resolved source, so this foreign body is ignored and the live source
+    # recomputes instead of showing foreign numbers.
+    legacy = analysis_cache.signature_of()
+    analysis_cache.save(
+        "surface_temperature",
+        {"variable": "surface_temperature", "n_naive": 999},
+        signature=legacy,
+    )
+    body = app_module._demo_body("surface_temperature")
+    assert body["n_naive"] == 0  # the flat source has no significant pixels
+
+
+def test_a_disk_cached_body_is_served_without_recomputing(monkeypatch):
+    # The analysis is minutes on a cold run; a persisted body must be reused so
+    # a server restart does not re-pay it. If the pipeline runs at all, fail.
+    # The autouse fixture has redirected the cache to a temp dir, so saving with
+    # the default root is what the app will read back.
+    body = {"variable": "soil_moisture_rootzone", "n_naive": 1, "units": "kg m-2"}
+    analysis_cache.save(
+        "soil_moisture_rootzone", body, signature=app_module._analysis_signature()
+    )
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("recomputed despite a disk-cached body")
+
+    monkeypatch.setattr(app_module.pipeline, "cry_wolf", boom)
+    app_module._demo_body.cache_clear()
+    try:
+        assert app_module._demo_body("soil_moisture_rootzone") == body
+    finally:
+        app_module._demo_body.cache_clear()

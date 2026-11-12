@@ -106,8 +106,13 @@ def generate_land_grid(
 
 
 def save_bundled(da: xr.DataArray, path: str) -> None:
-    """Write the sample grid to NetCDF at ``path``."""
-    da.to_netcdf(path)
+    """Write the sample grid to NetCDF3 at ``path``.
+
+    Pinning the engine keeps the artifact readable with scipy alone; engine
+    autodetection picks HDF5 whenever any HDF5 backend is present, including a
+    half-installed one.
+    """
+    da.to_netcdf(path, engine="scipy")
 
 
 def load_bundled(path: str) -> xr.DataArray:
@@ -116,4 +121,4 @@ def load_bundled(path: str) -> xr.DataArray:
 
     if not os.path.exists(path):
         raise FileNotFoundError(path)
-    return xr.load_dataarray(path)
+    return xr.load_dataarray(path, engine="scipy")

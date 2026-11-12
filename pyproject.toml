@@ -18,6 +18,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest", "httpx"]
+# No HDF5 reader: the live PSL source uses THREDDS' NetCDF Subset Service,
+# which returns NetCDF3 — readable by scipy, already a base dependency.
 
 [tool.setuptools]
 packages = ["trend_detective", "trend_detective.data", "trend_detective.analysis", "trend_detective.api"]

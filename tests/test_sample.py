@@ -43,6 +43,18 @@ def test_bundled_round_trip(tmp_path):
     assert np.allclose(loaded.values, da.values, equal_nan=True)
 
 
+def test_bundled_file_is_classic_netcdf3(tmp_path):
+    # NetCDF3 is readable by scipy alone. Letting xarray autodetect the engine
+    # picks HDF5 when a backend is merely half-installed (h5netcdf without
+    # h5py), which breaks a bundled artifact that used to work.
+    da, _ = sample.generate_land_grid(seed=3, ny=4, nx=4, n_months=12)
+    path = tmp_path / "sample.nc"
+
+    sample.save_bundled(da, str(path))
+
+    assert path.read_bytes()[:3] == b"CDF"
+
+
 def test_load_bundled_missing_raises(tmp_path):
     import pytest
 

@@ -27,8 +27,10 @@ DEMO_GRID = (30, 60)
 #: AR(1) autocorrelation of the demo grid — enough memory to be a fair test.
 DEMO_AUTOCORR = 0.5
 
-#: Data source used by the API when none is configured.
-DATA_SOURCE = "power"
+#: Data source used by the API when none is configured. PSL is the only source
+#: that can fill a world map; the first run downloads its chunks (see
+#: PSL_CHUNK_YEARS) and every run after that is local.
+DATA_SOURCE = "psl"
 
 #: Live NASA POWER source: bounding box as (lat_min, lat_max, lon_min, lon_max).
 #: Default is a Greenland box (cryosphere, long MERRA-2 record).
@@ -40,3 +42,13 @@ POWER_END = 2024
 
 #: Per-request timeout for POWER, in seconds (multi-tile boxes add requests).
 POWER_TIMEOUT = 120.0
+
+#: Global NOAA PSL source: year range and spatial decimation (1 = full 2.5 deg).
+#: Measured cost per analysis, 540 months: stride 1 -> ~140 s, stride 2 -> ~43 s.
+PSL_START = 1980
+PSL_END = 2024
+PSL_STRIDE = 2
+
+#: Years per NCSS request. THREDDS cut off a whole 45-year request at ~7 min with
+#: a truncated body; shorter requests complete and each one is cached separately.
+PSL_CHUNK_YEARS = 5
