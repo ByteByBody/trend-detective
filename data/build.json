@@ -1,0 +1,1 @@
+{"schema": "static-1", "variables": ["soil_moisture_rootzone", "surface_temperature", "precipitation", "evapotranspiration", "snow_water_equivalent"], "source": "NASA GLDAS-2.1 Noah (1.0 deg, monthly)"}

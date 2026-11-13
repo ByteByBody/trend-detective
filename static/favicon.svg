@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Trend Detective">
+  <rect width="64" height="64" rx="14" fill="#0b3d91" />
+  <!-- A trend line that climbs, with one highlighted point: the pixel the naive
+       test calls a trend and the corrected test keeps. -->
+  <path d="M13 43 L24 35 L33 39 L43 24 L51 18"
+        fill="none" stroke="#8fd3ff" stroke-width="4"
+        stroke-linecap="round" stroke-linejoin="round" />
+  <circle cx="43" cy="24" r="4.4" fill="#ffd166" stroke="#0b3d91" stroke-width="2" />
+</svg>

@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en" data-build="8">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Trend Detective — one record, two verdicts</title>
+  <meta name="description" content="A climate trend map with a switch: the raw per-pixel test, and the corrected test that drops the false alarms." />
+  <meta name="theme-color" content="#041416" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=Azeret+Mono:wght@400;500;600&display=swap"
+    rel="stylesheet" />
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="icon" type="image/svg+xml" href="static/favicon.svg" />
+  <link rel="stylesheet" href="static/styles.css?v=8" />
+</head>
+<body>
+  <a class="skip" href="#stage">Skip to the map</a>
+
+  <header class="topbar">
+    <h1 class="wordmark">
+      <a class="wordmark__link" href="./">
+        <span class="wordmark__name">Trend Detective</span>
+        <span class="wordmark__sub">NASA Space Apps 2026 · build 8</span>
+      </a>
+    </h1>
+    <nav class="variables" id="variable" role="radiogroup" aria-labelledby="var-label" aria-busy="true">
+      <span class="visually-hidden" id="var-label">Variable</span>
+    </nav>
+    <button class="method-open" id="method-open" type="button">Method</button>
+  </header>
+
+  <div class="stripes" id="stripe-band" aria-hidden="true">
+    <span class="stripes__rule"></span>
+  </div>
+
+  <main>
+    <section class="stage" id="stage" aria-label="Trend map">
+      <div class="stage-ambient" id="stage-ambient" aria-hidden="true"></div>
+      <div class="stage-frame" aria-hidden="true"></div>
+      <div class="map" id="map" role="region" tabindex="0"
+           aria-label="Climate trend map. Press Enter to inspect the centre cell. Arrow keys move the selection; plus and minus zoom."></div>
+
+      <div class="crosshair" id="crosshair" aria-hidden="true" hidden>
+        <span class="crosshair__x"></span>
+        <span class="crosshair__y"></span>
+      </div>
+
+      <div class="stage-id">
+        <p class="stage-id__eyebrow" id="stage-source">NASA GLDAS-2.1 Noah</p>
+        <p class="stage-id__name" id="stage-name">Surface air temperature</p>
+        <p class="stage-id__meta" id="stage-meta">Reading the field…</p>
+      </div>
+
+      <div class="switch-wrap">
+        <div class="switch" id="mode" role="radiogroup" aria-label="Trend test" data-mode="naive">
+          <button class="switch__btn" id="mode-naive" type="button" role="radio" aria-checked="true">
+            <i class="switch__dot switch__dot--naive" aria-hidden="true"></i>
+            <span class="switch__name">Naive</span>
+            <span class="switch__count" id="count-naive">—</span>
+          </button>
+          <button class="switch__btn" id="mode-corrected" type="button" role="radio" aria-checked="false">
+            <i class="switch__dot switch__dot--corrected" aria-hidden="true"></i>
+            <span class="switch__name">Corrected</span>
+            <span class="switch__count" id="count-corrected">—</span>
+          </button>
+        </div>
+        <p class="delta" id="delta" role="status" aria-live="polite">Loading the field…</p>
+      </div>
+
+      <div class="busy" id="busy" role="status" aria-live="polite" hidden>
+        <span class="busy__bar" aria-hidden="true"></span>
+        <span class="busy__copy">
+          <span class="busy__line" id="busy-line">Loading the field…</span>
+          <span class="busy__note" id="busy-note" hidden>First run can take about 10 minutes; later visits reuse the cache.</span>
+        </span>
+      </div>
+
+      <aside class="hud hud--legend" id="legend" aria-label="Trend legend">
+        <div class="legend__head">
+          <span class="legend__eyebrow">Trend per decade</span>
+          <span class="legend__unit" id="legend-unit"></span>
+        </div>
+        <div class="legend__ramp" id="legend-ramp"></div>
+        <div class="legend__ends">
+          <span id="legend-min">—</span>
+          <span id="legend-zero">0</span>
+          <span id="legend-max">—</span>
+        </div>
+        <div class="legend__keys">
+          <span><i class="key key--solid" aria-hidden="true"></i>survives correction</span>
+          <span id="legend-key-dashed"><i class="key key--dashed" aria-hidden="true"></i>dropped by correction</span>
+          <span id="legend-key-step" hidden><i class="key key--step" aria-hidden="true"></i>step change in data</span>
+        </div>
+        <p class="legend__facts" id="facts"></p>
+      </aside>
+
+      <div class="loupe" id="loupe" hidden>
+        <i class="loupe__dot" aria-hidden="true"></i>
+        <span id="loupe-coords"></span>
+        <span id="loupe-trend"></span>
+        <span class="loupe__step" id="loupe-step" hidden>step change</span>
+      </div>
+    </section>
+
+    <section class="evidence" aria-label="Selected cell evidence">
+      <article class="readout" id="cell-readout" aria-live="polite">
+        <p class="readout__label">Selected cell</p>
+        <p class="readout__empty" id="cell-empty">Click a cell to inspect it.</p>
+        <div class="readout__body" id="cell-detail" hidden>
+          <p class="readout__coords" id="cell-coords"></p>
+          <p class="readout__trend" id="cell-trend"></p>
+          <div class="readout__meta">
+            <span class="readout__p" id="cell-p"></span>
+            <span class="readout__status" id="cell-status"></span>
+          </div>
+          <div class="readout__verdicts" id="cell-verdicts">
+            <span class="tick" id="cell-naive"></span>
+            <span class="tick" id="cell-corrected"></span>
+          </div>
+          <p class="readout__step" id="cell-step" hidden></p>
+        </div>
+        <div class="readout__foot">
+          <button class="tool" id="fingerprint-toggle" type="button" aria-pressed="false" disabled>
+            Find similar regions
+          </button>
+          <div class="fingerprint" id="fingerprint-panel" hidden>
+            <p class="fingerprint__status" id="fingerprint-status" role="status" aria-live="polite"></p>
+            <ol class="fingerprint__list" id="fingerprint-list"></ol>
+          </div>
+        </div>
+      </article>
+
+      <article class="chart-panel">
+        <header class="chart-panel__head">
+          <div>
+            <h2 class="chart-panel__title">Cell history</h2>
+            <p class="chart-panel__hint" id="chart-hint">Click the map to read a cell.</p>
+          </div>
+          <div class="chart-panel__tools">
+            <p class="chart-panel__key" aria-hidden="true">
+              <span class="key key--line"></span>monthly
+              <span class="key key--trend"></span>trend
+            </p>
+            <button class="tool tool--quiet" id="chart-reset" type="button">Reset view</button>
+          </div>
+        </header>
+        <div class="chart" id="chart" role="img" aria-label="Monthly series for the selected cell"></div>
+        <p class="chart-panel__gesture">Scroll to zoom, drag to pan, double-click to reset.</p>
+      </article>
+    </section>
+  </main>
+
+  <dialog class="method" id="method">
+    <div class="method__inner">
+      <form method="dialog">
+        <button class="method__close" type="submit" aria-label="Close method">Close</button>
+      </form>
+      <p class="method__eyebrow">Method</p>
+      <h2 class="method__title">The correction, in one panel</h2>
+      <p class="method__source" id="data-source"></p>
+      <dl class="method__stats">
+        <div><dt>Cutoff</dt><dd id="method-cutoff">—</dd></div>
+        <div><dt>Coverage</dt><dd id="method-coverage">—</dd></div>
+        <div><dt>Clustering (Moran's I)</dt><dd id="method-morans">—</dd></div>
+        <div><dt>Grid</dt><dd id="method-grid">—</dd></div>
+      </dl>
+      <p class="method__note">
+        Correction: Benjamini–Hochberg FDR at q = 0.05, then connected patches of
+        five pixels or more survive. Autocorrelation is handled with a Hamed–Rao
+        variance correction, and seasonality is removed month by month first.
+      </p>
+      <p class="method__note method__note--small">NASA Space Apps 2026 · cry-wolf slice</p>
+    </div>
+  </dialog>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+  <script src="static/data-source.js?v=8"></script>
+  <script>window.TD_DATA_MODE = "static";</script>
+  <script src="static/projection.js?v=8"></script>
+  <script src="static/format.js?v=8"></script>
+  <script src="static/trend-layer.js?v=8"></script>
+  <script src="static/chart-view.js?v=8"></script>
+  <script src="static/app.js?v=8"></script>
+</body>
+</html>
