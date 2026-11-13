@@ -1,0 +1,30 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # The front-end modules are exercised through node, so the runner needs it.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      # test_api.py recomputes synthetic cry-wolf bodies (~100 s each) and is
+      # too slow for every push.
+      - name: Run the suite
+        run: python -m pytest -q --ignore=tests/test_api.py
