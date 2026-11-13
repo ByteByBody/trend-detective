@@ -179,6 +179,9 @@ def _compute_demo_body(variable: str) -> dict:
         "valid_fraction": float(res.valid_fraction),
         "naive_mask": _mask(res.naive_mask.values),
         "corrected_mask": _mask(res.corrected_mask.values),
+        # Step changes are marked, never excluded from the two verdicts above.
+        "step_mask": _mask(res.step_mask.values),
+        "step_magnitude": _grid(res.step_magnitude.values),
         "slope": _grid(slope),
         # Per-pixel p-values so a dot's hover readout can quote the number the
         # verdict rests on, not just the verdict.

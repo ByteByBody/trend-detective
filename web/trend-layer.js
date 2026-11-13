@@ -29,6 +29,9 @@
   const WARM = [255, 90, 54];
   const PAPER = [242, 247, 247];
   const EMBER = [255, 107, 69];
+  // Step changes are data defects, not verdicts, so they get their own hue
+  // that is in neither the cool/warm ramp nor the outline palette.
+  const STEP_COLOR = [178, 132, 255];
 
   function cellAt(lat, lon, latGrid, lonGrid) {
     let bi = 0;
@@ -140,12 +143,32 @@
     return bj;
   }
 
+  function stepAt(demo, i, j) {
+    // Sources and cached bodies from before the detector have no step field at
+    // all; that is "nothing marked", not an error.
+    return Boolean(demo.step_mask && demo.step_mask[i] && demo.step_mask[i][j]);
+  }
+
+  function stepCount(demo) {
+    let n = 0;
+    for (let i = 0; i < demo.lat.length; i++) {
+      for (let j = 0; j < demo.lon.length; j++) {
+        if (stepAt(demo, i, j)) n += 1;
+      }
+    }
+    return n;
+  }
+
   function describeCell(demo, i, j) {
     const flag = flagAt(demo, i, j);
     let status = "none";
     if (flag.naive && flag.corrected) status = "both";
     else if (flag.naive) status = "dropped";
     else if (flag.corrected) status = "corrected-only";
+    const magnitude =
+      demo.step_magnitude && demo.step_magnitude[i]
+        ? demo.step_magnitude[i][j]
+        : null;
     return {
       lat: demo.lat[i],
       lon: demo.lon[j],
@@ -154,6 +177,8 @@
       naive: flag.naive,
       corrected: flag.corrected,
       status: status,
+      step: stepAt(demo, i, j),
+      stepMagnitude: magnitude === undefined ? null : magnitude,
     };
   }
 
@@ -236,6 +261,20 @@
       const lon = west + ((x + 0.5) / width) * (east - west);
       columns[x] = columnForLongitude(lon, demo.lon);
     }
+    // Pixel spans each cell owns, so the step marker can sit at its centre
+    // instead of being pinned to an assumed linear grid.
+    const columnSpan = new Array(nx);
+    for (let x = 0; x < width; x++) {
+      const j = columns[x];
+      if (!columnSpan[j]) columnSpan[j] = [x, x];
+      else columnSpan[j][1] = x;
+    }
+    const rowSpan = new Array(ny);
+    for (let y = 0; y < h; y++) {
+      const i = Math.min(ny - 1, Math.max(0, rows[y]));
+      if (!rowSpan[i]) rowSpan[i] = [y, y];
+      else rowSpan[i][1] = y;
+    }
     const data = new Uint8ClampedArray(width * h * 4);
     const classes = new Uint8Array(width * h);
     let count = 0;
@@ -297,6 +336,31 @@
       }
     }
 
+    // Step changes are painted last, in every mode: a data defect is worth
+    // seeing whether or not the trend test flagged the cell.
+    for (let i = 0; i < ny; i++) {
+      for (let j = 0; j < nx; j++) {
+        if (!stepAt(demo, i, j)) continue;
+        const xs = columnSpan[j];
+        const ys = rowSpan[i];
+        if (!xs || !ys) continue;
+        const cx = xs[0] + Math.floor((xs[1] - xs[0]) / 2);
+        const cy = ys[0] + Math.floor((ys[1] - ys[0]) / 2);
+        for (let dy = 0; dy < 2; dy++) {
+          for (let dx = 0; dx < 2; dx++) {
+            const x = cx + dx;
+            const y = cy + dy;
+            if (x >= width || y >= h) continue;
+            const k = (y * width + x) * 4;
+            data[k] = STEP_COLOR[0];
+            data[k + 1] = STEP_COLOR[1];
+            data[k + 2] = STEP_COLOR[2];
+            data[k + 3] = OUTLINE_ALPHA;
+          }
+        }
+      }
+    }
+
     return {
       width: width,
       height: h,
@@ -310,10 +374,13 @@
 
   return {
     CELL_PX: CELL_PX,
+    STEP_COLOR: STEP_COLOR,
     cellAt: cellAt,
     cellBounds: cellBounds,
     fieldBounds: fieldBounds,
     classify: classify,
+    stepAt: stepAt,
+    stepCount: stepCount,
     describeCell: describeCell,
     trendRange: trendRange,
     buildRaster: buildRaster,

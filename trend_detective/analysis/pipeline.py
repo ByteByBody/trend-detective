@@ -1,7 +1,7 @@
 """The cry-wolf pipeline: naive vs field-significance-corrected trend maps.
 
-Composes decomposition -> trend test -> BH-FDR -> coherence. See
-docs/algorithms.md section 7.
+Composes decomposition -> trend test -> BH-FDR -> coherence, then marks
+step changes in the same series. See docs/algorithms.md section 7.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import numpy as np
 import xarray as xr
 
 from trend_detective import config
-from trend_detective.analysis import coherence, decomp, significance, trend
+from trend_detective.analysis import coherence, decomp, significance, steps, trend
 
 
 @dataclass(frozen=True)
@@ -24,6 +24,8 @@ class CryWolfResult:
     naive_mask: xr.DataArray
     corrected_mask: xr.DataArray
     insufficient_mask: xr.DataArray
+    step_mask: xr.DataArray
+    step_magnitude: xr.DataArray
     threshold: float
     n_naive: int
     n_corrected: int
@@ -47,6 +49,7 @@ def cry_wolf(
     min_patch: int = config.MIN_PATCH_SIZE,
     min_valid: float = config.MIN_VALID_FRACTION,
     do_deseasonalize: bool = True,
+    do_steps: bool = True,
 ) -> CryWolfResult:
     """Run the cry-wolf analysis on a ``(time, lat, lon)`` DataArray."""
     series = decomp.deseasonalize(da) if do_deseasonalize else da
@@ -69,12 +72,26 @@ def cry_wolf(
     slope_values = np.asarray(slope.values, dtype=float)
     morans = coherence.morans_i(slope_values, corrected)
 
+    # Mark abrupt steps separately; never fold them into the two verdicts. The
+    # detector reads the same series the trend test did, so a step is judged on
+    # what actually drove the p-value.
+    if do_steps:
+        change = steps.step_change_test(series)
+        step_mask = change.mask
+        step_magnitude = change.magnitude
+    else:
+        shape = series.shape[1:]
+        step_mask = _grid(np.zeros(shape, dtype=bool), da, "step_mask")
+        step_magnitude = _grid(np.full(shape, np.nan), da, "step_magnitude")
+
     return CryWolfResult(
         slope=slope,
         p_value=_grid(p_values, da, "p_value"),
         naive_mask=_grid(naive, da, "naive_mask"),
         corrected_mask=_grid(corrected, da, "corrected_mask"),
         insufficient_mask=_grid(insufficient, da, "insufficient_mask"),
+        step_mask=step_mask,
+        step_magnitude=step_magnitude,
         threshold=float(threshold),
         n_naive=int(naive.sum()),
         n_corrected=int(corrected.sum()),

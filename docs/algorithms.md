@@ -18,8 +18,9 @@ Everything is NaN-aware and nothing is imputed.
 │ power NASA, 10 deg │──▶│ Theil–Sen slope           │──▶│ /demo/{var}  │──▶│ projection.js    │
 │ synthetic truth    │   │ Mann–Kendall + Hamed–Rao  │   │ /timeseries  │   │ chart-view.js    │
 └────────────────────┘   │ BH-FDR + coherence gate   │   │ /fingerprint │   │ format.js        │
-                         │ Moran's I                 │   │ /health      │   │ app.js           │
-                         └───────────────────────────┘   └──────────────┘   └──────────────────┘
+                         │ step-change detector      │   │ /health      │   │ app.js           │
+                         │ Moran's I                 │   └──────────────┘   └──────────────────┘
+                         └───────────────────────────┘
 ```
 
 | area | module | responsibility |
@@ -27,7 +28,7 @@ Everything is NaN-aware and nothing is imputed.
 | catalogue | `trend_detective/catalog.py` | the five variables, their labels and units |
 | tunables | `trend_detective/config.py` | source selection, FDR level, gate sizes, span and stride |
 | sources | `trend_detective/data/` | PSL, POWER, synthetic, plus the download and analysis caches |
-| analysis | `trend_detective/analysis/` | decomposition, trend tests, field significance, coherence, fingerprints |
+| analysis | `trend_detective/analysis/` | decomposition, trend tests, field significance, coherence, step changes, fingerprints |
 | API | `trend_detective/api/app.py` | JSON endpoints, the analysis cache, static hosting |
 | client | `web/` | one Leaflet map, the raster builder, the Plotly chart |
 
@@ -86,7 +87,7 @@ Bundled IO is `save_bundled(da, path)` and `load_bundled(path)` over xarray NetC
   an optional accelerator rather than a declared dependency, so on a bare install `auto`
   means climatology and on this machine it means STL. STL dominates the whole pipeline:
   minutes for a world grid against seconds for climatology. That is the reason the API
-  writes each finished body to disk (§13).
+  writes each finished body to disk (§14).
 - **NaN rule:** where the input is NaN, the output is NaN. Nothing is filled.
 - **STL fallback:** a pixel STL cannot handle, whether it has a missing month or a
   series shorter than two periods (< 24 months), falls back to **climatology** for that
@@ -219,7 +220,7 @@ Undefined cases, such as no neighbours or zero variance, return `nan`.
 
 ## 7. Cry-wolf pipeline — `analysis/pipeline.py`
 
-**Signature:** `cry_wolf(da, q=0.05, min_patch=5, min_valid=0.8, do_deseasonalize=True) -> CryWolfResult`
+**Signature:** `cry_wolf(da, q=0.05, min_patch=5, min_valid=0.8, do_deseasonalize=True, do_steps=True) -> CryWolfResult`
 
 ```
 series = deseasonalize(da) if do_deseasonalize else da
@@ -235,15 +236,85 @@ nmask = naive_mask(p, alpha=0.05)
 cmask, threshold = benjamini_hochberg(p, q)
 cmask = connected_patch_filter(cmask, min_size=min_patch, q=..., connectivity=8)
 morans_i = morans_i(slope, cmask)                   # spatial-clustering diagnostic
+
+change = step_change_test(series) if do_steps else empty   # §8, marked not excluded
 ```
 
 `CryWolfResult` carries `slope, p_value, naive_mask, corrected_mask,
-insufficient_mask, threshold, n_naive, n_corrected, n_insufficient, valid_fraction,
-morans_i`. The `insufficient_mask` records the pixels the valid-fraction gate excluded,
-so "not enough data" stays distinguishable from "tested, not significant", and the
-evidence card reports the count.
+insufficient_mask, step_mask, step_magnitude, threshold, n_naive, n_corrected,
+n_insufficient, valid_fraction, morans_i`. The `insufficient_mask` records the pixels
+the valid-fraction gate excluded, so "not enough data" stays distinguishable from
+"tested, not significant", and the evidence card reports the count.
 
-## 8. API — `api/app.py`
+The step mask is a third, independent layer. Steps are marked, never removed: the two
+verdicts are computed exactly as before, so a cell can be a step *and* a corrected flag
+at the same time, and the map shows both.
+
+## 8. Step-change detection — `analysis/steps.py`
+
+**Signature:** `step_change_test(da, window=60, stride=6, threshold_sigma=15.0, persistence_min=0.5, persistence_max=2.0) -> StepChange(mask, magnitude)`
+
+A record that jumps from one level to another — an upstream ingest defect, a gauge
+relocation, a satellite product change — can pass every trend test for a reason that has
+nothing to do with climate. This module flags those pixels so the map can say "this
+record is broken" instead of quietly reporting the break as a trend. It is the one
+diagnostic that is *additive*: it never changes a verdict.
+
+Two adjacent windows, slid across the record, give the statistic:
+
+```
+D(k) = median(x[k : k+window]) - median(x[k-window : k])   # every stride-th k
+D    = max_k |D(k)|                                        # the largest jump
+split = argmax_k |D(k)|                                    # where it happened
+```
+
+`window = 60` months is deliberate. A five-year median is not moved by a single wet
+month, so a flat desert series that spikes when it rains does not register; a genuine
+level change moves every month's median after it. Both `D` and its sign are returned, so
+`step_magnitude` carries the direction of the jump at the winning split.
+
+The cut is field-relative, like the FDR step before it:
+
+```
+active    = pixels with D > 0                          # any step at all
+reference = D over active pixels
+s         = 1.4826 * MAD(reference)                    # robust scale
+flagged   = D > median(reference) + 15 * s             # and the persistence band
+```
+
+Restricting the reference to active pixels matters on sparse fields. Snow water
+equivalent is zero over most of the world, so the whole-field median and MAD are both
+zero; a scale of zero would either flag nothing or flag everything. Reading the
+distribution of the nonzero steps instead gives a scale that means something. A field
+whose steps are all the same size has no scale to cut against and flags nothing.
+
+Magnitude alone is not enough — a smooth ramp also produces large window-to-window
+differences. So a second gate compares the jump with the shift that is actually left at
+the end of the record:
+
+```
+endpoints = median(last window) - median(first window)
+keep      = 0.5 * D <= |endpoints| <= 2.0 * D
+```
+
+A durable step of size `H` leaves `|endpoints| ~ H ~ D`, so its ratio sits near 1 and it
+passes. A smooth ramp over 540 months leaves the whole ramp's worth, several window-steps
+(ratios of 4–48 on the real field), and is rejected. A flood or drought excursion that
+returns to its old level leaves almost nothing (ratios near 0) and is rejected too. The
+band is what separates "the record moved and stayed moved" from "the record went up and
+came back" and from "the record was always climbing".
+
+Thresholds live in `config.py`: `STEP_WINDOW`, `STEP_STRIDE`, `STEP_THRESHOLD_SIGMA`,
+`STEP_PERSISTENCE_MIN`, `STEP_PERSISTENCE_MAX`. The rule was signed off against the real
+PSL field, where it marks 11 soil-moisture pixels and none in the other four variables.
+The clearest is (80.95°N, −67.50°E): its record holds 190.19 kg m-2 for 1980–1998 and
+about 729 after, a jump of 532.91 kg m-2 — 111 robust sigmas against the field's 4.76
+scale — while its neighbours stay within 0.41. The persistence guard rejects six more
+soil pixels that cleared the magnitude cut but whose end-of-record shift ran four to
+forty-eight window-steps: smooth ramps, not level changes. That rejection is the reason
+the guard exists.
+
+## 9. API — `api/app.py`
 
 - `GET /catalog` lists `{key,label,units,source,description}` from `catalog.VARIABLES`,
   filtered to the variables the active source serves, so the UI can never offer a
@@ -253,12 +324,13 @@ evidence card reports the count.
   `provenance(variable) -> str`; the rest fall back to `Variable.source`. Without this,
   PSL air temperature would be served under the catalogue's `MERRA-2`/`GLDAS` label.
 - `GET /demo/{variable}` returns the `CryWolfResult` as JSON: `lat`, `lon`, `naive_mask`
-  (0/1), `corrected_mask` (0/1), `slope`, `p_value` (per pixel, for the dot hover
-  readout), `annual_anomaly` (one global annual-mean anomaly per whole year, for the
-  stripe band), plus `units`, `source`, `threshold`, `n_naive`, `n_corrected`,
-  `n_insufficient`, `morans_i` and `valid_fraction`. An unknown variable, or one the
-  source cannot serve, raises `HTTPException(404)` with the available keys in `detail`.
-  NaN slopes become `null`, since JSON has no NaN.
+  (0/1), `corrected_mask` (0/1), `step_mask` (0/1, §8), `slope`, `p_value` (per pixel, for
+  the dot hover readout), `step_magnitude` (signed jump, `null` where unmarked),
+  `annual_anomaly` (one global annual-mean anomaly per whole year, for the stripe band),
+  plus `units`, `source`, `threshold`, `n_naive`, `n_corrected`, `n_insufficient`,
+  `morans_i` and `valid_fraction`. An unknown variable, or one the source cannot serve,
+  raises `HTTPException(404)` with the available keys in `detail`. NaN slopes become
+  `null`, since JSON has no NaN.
 - `GET /fingerprint/{variable}?lat=&lon=&k=` returns the region under the click and its
   nearest twins across all served variables. The first call starts a background build
   and returns `status="preparing"` with `progress {done,total}`; later calls return
@@ -283,8 +355,8 @@ evidence card reports the count.
 
 The data layer is pluggable. The API reads through `data.base.DatasetSource`
 (`load(variable) -> DataArray`), and three sources are registered by name: `psl`
-(`PslSource`, global NOAA reanalysis, §10), `power` (`PowerRegionalSource`, live NASA
-MERRA-2, §9) and `synthetic` (`SyntheticSource`, the bundled known-truth grid).
+(`PslSource`, global NOAA reanalysis, §11), `power` (`PowerRegionalSource`, live NASA
+MERRA-2, §10) and `synthetic` (`SyntheticSource`, the bundled known-truth grid).
 `config.DATA_SOURCE` selects one and ships as `"psl"`, the only source that can fill a
 world map. A source that carries only a subset also implements `variables() ->
 list[str]`; `base.available_variables(source)` falls back to the whole catalogue for
@@ -292,7 +364,7 @@ sources that do not, and the API uses it for both the catalogue listing and the 
 guard. The deferred `data.fetch.EarthdataSource` still raises `NotImplementedError` for
 GES DISC.
 
-## 9. Live NASA POWER source — `data/power.py`
+## 10. Live NASA POWER source — `data/power.py`
 
 **Signature:** `PowerRegionalSource(bbox=None, start=None, end=None, fetch=None).load(variable) -> DataArray`, with `parse_regional(payload) -> DataArray` and `tiles(bbox) -> list[box]` as pure helpers.
 
@@ -345,7 +417,7 @@ defaults (`config.POWER_BBOX/START/END`) are the Greenland box 60–70°N, 50–
 box is the empty case, naive 1 and corrected 0, so `morans_i` is undefined and
 serialises as `null`.
 
-## 10. Global NOAA PSL source — `data/psl.py`
+## 11. Global NOAA PSL source — `data/psl.py`
 
 **Signature:** `PslSource(start=None, end=None, stride=None, chunk=None, fetcher=None, opener=None).load(variable)`, with `ncss_url(path, name, start, end, stride)`, `cache_name(path, start, end, stride)`, `_spans(start, end, years)` and `extract_grid(dataset, name, start, end, stride)` as pure helpers.
 
@@ -387,6 +459,10 @@ level, not the 2 m field the catalogue label promises.
 | `precipitation` | `prate` | kg/m2/s | × 86,400 | mm/day | July ITCZ 6.8e-5 → 5.9 mm/day |
 | `soil_moisture_rootzone` | `soilw` | fraction | × 1000 × 1.9 m | kg/m2 | Amazon 0.26 → 494 kg/m2 |
 | `evapotranspiration` | `lhtfl` | W/m2 | ÷ 2.5e6 × 86,400 | mm/day | July tropics +133.6 → 4.6 mm/day, sign kept |
+
+Precipitation carries no density factor. `kg/m2` is already a depth of water, since 1 kg
+over 1 m2 is 1 mm, so `prate` converts only seconds to days. Soil moisture does carry one,
+because its input is a dimensionless volume fraction rather than a per-area mass.
 
 The latent-heat sign is deliberate. The NCEP file is positive upward over the warm ocean
 in July (mean +133.6 W/m2), so it is evaporation rather than condensation, and flipping
@@ -447,7 +523,7 @@ carry `source="NOAA PSL / NCEP-NCAR reanalysis"`, so nothing downstream can pres
 a NASA product. `/catalog` included: it reports what the source declares rather than the
 catalogue's nominal product.
 
-## 11. Trend fingerprints — `analysis/fingerprint.py`
+## 12. Trend fingerprints — `analysis/fingerprint.py`
 
 **Signatures:** `region_vectors(slopes, labels) -> RegionVectors` (a frozen dataclass with
 `.matrix` regions×variables, `.variables`, `.usable`, `.region_ids`),
@@ -495,7 +571,7 @@ minutes, keyed on the (selected variable, served set) pair. It reports
 vectors and rings, every region centroid for click-snapping, and the kept variable names
 for the "driving variables" legend.
 
-## 12. Implementation notes and pitfalls
+## 13. Implementation notes and pitfalls
 
 - **Ties:** with ties present, MK's no-tie variance is slightly off, which is acceptable
   for this slice and noted as a limitation. BH ordering must be **stable** so equal
@@ -503,7 +579,7 @@ for the "driving variables" legend.
 - **Performance:** pair-index vectors are built once per grid and reused, and the
   per-pixel loop is faster than a vectorised block here (measured 45×90 → 3.7 s cold).
   Results are cached per variable in the process and persisted to disk across restarts
-  (§13).
+  (§14).
 - **Autocorrelation estimate:** the lag-1 `rho` is estimated on the linear-detrended
   residual, floored at 1.0 and clamped to `[0, 0.99]`.
 - **Significance against magnitude:** p answers "real or luck", not size. The evidence
@@ -547,7 +623,7 @@ for the "driving variables" legend.
   normal filtering, since nearest-neighbour would make them look worse rather than
   better.
 
-## 13. Persisted analysis cache — `data/analysis_cache.py`
+## 14. Persisted analysis cache — `data/analysis_cache.py`
 
 The cry-wolf body is expensive. With `statsmodels` installed, STL deseasonalisation
 dominates (§2) and costs minutes per variable, while the API's in-process `lru_cache`
@@ -585,7 +661,7 @@ cache_dir=None) -> dict | None`, `save(variable, body, signature=None, cache_dir
   is recomputed, while a disk hit returns the stored body in under a second and survives a
   `--reload`.
 
-## 14. Web client — `web/`
+## 15. Web client — `web/`
 
 Five vanilla-JS modules, no build step, no framework. `index.html` loads them with a
 `?v=` cache key that tracks the build stamp on the `<html>` element.
@@ -594,7 +670,7 @@ Five vanilla-JS modules, no build step, no framework. `index.html` loads them wi
 | --- | --- |
 | `projection.js` | `mercatorRows(lat, height)` returns the raster row each latitude maps to, inverting Web Mercator so the slope grid lands where it belongs |
 | `format.js` | number and unit formatting: thousands separators, one unit per value, no scientific notation |
-| `trend-layer.js` | cell lookup, cell classification, the geographic field box, and the RGBA raster builder |
+| `trend-layer.js` | cell lookup, cell classification, the geographic field box, the RGBA raster builder, and the step marker |
 | `chart-view.js` | Plotly traces, layout and config for the explorable cell chart |
 | `app.js` | the orchestrator: catalogue, catalogue-driven variable chips, one Leaflet map, the mode switch, the readout, the fingerprint, the stripe band |
 
@@ -608,7 +684,15 @@ outline that marks it cannot drift apart. `app.js` prebuilds the naive, correcte
 dropped rasters per variable, and the switch swaps image opacity rather than refetching.
 A blurred, dimmed copy of the visible raster fills the stage wings.
 
+`stepAt(demo, i, j)` reads the step mask, defaulting to clean when an older body has no
+such field, and `stepCount(demo)` totals it. `buildRaster` paints a violet 2×2 marker at
+the centre of every marked cell in all three modes — a broken record is not a verdict, so
+it is not part of the flag count and does not disappear with the corrected view. The
+legend key, the hover card and the readout line appear only when a variable has at least
+one marked cell.
+
 Clicking the map snaps to the nearest grid cell through `TDTrend.cellAt` and redraws the
-selection from `TDTrend.cellBounds`. The readout shows the trend per decade, the p-value
-and both verdicts, and the chart below it is a Plotly view configured to zoom on the
-wheel, pan on drag and reset on double-click.
+selection from `TDTrend.cellBounds`. The readout shows the trend per decade, the p-value,
+both verdicts, and — when the record holds one — the size of its step change. The chart
+below it is a Plotly view configured to zoom on the wheel, pan on drag and reset on
+double-click.

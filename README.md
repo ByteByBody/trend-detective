@@ -24,19 +24,28 @@ For every pixel of a monthly gridded field:
 4. Compare two verdicts. **Naive** flags everything with `p < 0.05`. **Corrected** passes
    those p-values through Benjamini–Hochberg at `q = 0.05` and then keeps only pixels
    inside a connected patch of at least five.
+5. Mark records that jump from one level to another. A 60-vs-60-month median step that
+   clears fifteen robust field sigmas and is still there at the end of the record is a
+   record defect rather than a climate trend, so the cell gets a violet marker — in both
+   modes, without changing either verdict.
 
 Results on the shipped field, one analysis per variable:
 
-| variable | naive flags | corrected | dropped |
-| --- | --- | --- | --- |
-| Surface air temperature | 3,456 | 3,407 | 49 |
-| Evapotranspiration | 2,947 | 2,756 | 191 |
-| Precipitation | 2,856 | 2,678 | 178 |
-| Root-zone soil moisture | 1,062 | 994 | 68 |
-| Snow water equivalent | 5 | 0 | 5 |
+| variable | naive flags | corrected | dropped | step cells |
+| --- | --- | --- | --- | --- |
+| Surface air temperature | 3,456 | 3,407 | 49 | 0 |
+| Evapotranspiration | 2,947 | 2,756 | 191 | 0 |
+| Precipitation | 2,856 | 2,678 | 178 | 0 |
+| Root-zone soil moisture | 1,062 | 994 | 68 | 11 |
+| Snow water equivalent | 5 | 0 | 5 | 0 |
 
 Snow water equivalent is the clean empty case: five scattered flags, no patch behind any
 of them, so the corrected map draws nothing.
+
+Eleven soil-moisture records jump and stay jumped, which is the shape of an upstream
+ingest defect rather than a climate trend. The clearest sits at (80.95°N, −67.50°E),
+where the record holds 190.19 kg m-2 through 1998 and about 729 after — a jump of
+532.91 kg m-2, while its neighbours stay within 0.41.
 
 ## The map
 
@@ -46,6 +55,9 @@ and both pixel counts beside it.
 - Flagged cells are filled by trend magnitude, faint near zero and solid at the extremes.
 - A one-pixel outline marks the patch edge: solid for survivors, dashed ember for the
   pixels the correction drops.
+- A record with a sustained level change gets a violet marker in every mode. It is a data
+  quality warning, not a third verdict, so it never moves a cell between naive and
+  corrected.
 - Unflagged cells stay transparent, so the basemap remains readable.
 - Clicking anywhere snaps to the nearest grid cell, outlines it as an area and fills the
   readout with its trend, p-value and both verdicts.
@@ -87,6 +99,10 @@ at the source boundary, so nothing downstream ever sees a mixed-unit field:
 | `precipitation` | kg/m2/s | × 86,400 | mm/day |
 | `soil_moisture_rootzone` | fraction | × 1000 × 1.9 m | kg/m2 |
 | `evapotranspiration` | W/m2 | ÷ 2.5e6 × 86,400 | mm/day |
+
+Precipitation needs no density factor. `kg/m2` is already a water depth, since 1 kg of
+water over 1 m2 is 1 mm, so only seconds convert to days. Soil moisture does need one,
+because its input is a dimensionless volume fraction rather than a per-area mass.
 
 All five files sit on PSL's T62 Gaussian grid, so one horizontal grid is shared and the
 fingerprint can compare variables at a single pixel. Temperature reads
@@ -155,7 +171,7 @@ because an already-cached shell will not ask the server again.
 | endpoint | returns |
 | --- | --- |
 | `GET /catalog` | the variables the active source can serve, with units and true provenance |
-| `GET /demo/{variable}` | masks, per-pixel slope and p-value, counts, cutoff, Moran's I, annual anomaly |
+| `GET /demo/{variable}` | masks including step changes, per-pixel slope and p-value, counts, cutoff, Moran's I, annual anomaly |
 | `GET /timeseries/{variable}?lat=&lon=` | the nearest cell's monthly series, with axis labels |
 | `GET /fingerprint/{variable}?lat=&lon=&k=` | the clicked region and its nearest twins across all served variables |
 | `GET /health` | `{"status": "ok"}`, without touching the data source |
@@ -168,7 +184,7 @@ progress before it reports `ready`.
 
 ```
 trend_detective/
-  analysis/     trend tests, field significance, coherence, fingerprints, the pipeline
+  analysis/     trend tests, field significance, coherence, step changes, fingerprints, the pipeline
   api/          FastAPI app and the persisted analysis cache
   data/         PSL, POWER and synthetic sources, the download cache, the sample grid
   catalog.py    the five variables, their labels and units
@@ -191,6 +207,9 @@ be skipped while iterating:
 ```bash
 python -m pytest -q --ignore=tests/test_api.py
 ```
+
+That is the command CI runs on every push (`.github/workflows/tests.yml`), on Python 3.13
+with node for the front-end probes.
 
 The front-end modules are checked by the same suite through `node --check` and a few
 hand-written probes, so no separate JS toolchain is needed.
@@ -216,6 +235,9 @@ path a request takes, persistence and the structural decisions.
   anticipated stays deferred until the region count justifies it.
 - Seasonality removal defaults to the per-calendar-month climatology. STL is used
   automatically when `statsmodels` is installed.
+- The step detector needs 60 months on each side of a jump, so it cannot place a step in
+  the first or last five years of a record. It marks a broken record; it does not repair
+  it.
 
 ## Credits
 

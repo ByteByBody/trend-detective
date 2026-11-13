@@ -1,7 +1,7 @@
 """Spatial coherence: keep only significant pixels in connected patches.
 
 A real climate trend covers ground, not one random dot. See docs/algorithms.md
-section 6 and concepts doc section 2.1.
+section 6.
 """
 
 from __future__ import annotations

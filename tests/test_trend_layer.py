@@ -288,3 +288,79 @@ def test_a_flagged_cell_without_a_slope_stays_transparent():
         "return {count: r.count, opaque, empty: r.empty}; })()"
     )
     assert r == {"count": 0, "opaque": 0, "empty": True}
+
+
+def _step_demo(**overrides):
+    demo = {
+        "lat": [10, 0, -10],
+        "lon": [-20, 0, 20],
+        "slope": [[-0.02, 0.0, 0.03], [0.01, 0.0, -0.01], [0.0, 0.0, 0.0]],
+        "p_value": [[0.01, 0.02, 0.03], [0.04, 0.05, 0.06], [0.07, 0.08, 0.09]],
+        "naive_mask": [[True, False, True], [True, False, False], [False, False, False]],
+        "corrected_mask": [[True, False, False], [True, False, False], [False, False, False]],
+        "step_mask": [[False, True, False], [False, False, False], [False, False, False]],
+        "step_magnitude": [[None, 7.5, None], [None, None, None], [None, None, None]],
+    }
+    demo.update(overrides)
+    return demo
+
+
+def test_step_at_reads_the_mask_and_defaults_to_clean():
+    # Every source predates the step field, so a missing mask must read as
+    # "no step" rather than throwing on the first hover.
+    assert call(f"M.stepAt({json.dumps(_step_demo())}, 0, 1)") is True
+    assert call(f"M.stepAt({json.dumps(_step_demo())}, 0, 0)") is False
+    assert call(f"M.stepAt({json.dumps(DEMO)}, 0, 1)") is False
+
+
+def test_step_count_counts_marked_cells():
+    assert call(f"M.stepCount({json.dumps(_step_demo())})") == 1
+    assert call(f"M.stepCount({json.dumps(DEMO)})") == 0
+
+
+def _step_marker(mode):
+    demo = _step_demo()
+    return call(
+        f"(() => {{ const r = M.buildRaster({json.dumps(demo)}, {json.dumps(mode)}, 40, null);"
+        "const col = M.STEP_COLOR;"
+        "const box = M.fieldBounds(demo.lat, demo.lon);"
+        "const west = box[0][1], east = box[1][1];"
+        "const span = M.cellBounds(0, 1, demo.lat, demo.lon);"
+        "let found = 0, outside = 0;"
+        "for (let y = 0; y < r.height; y++) {"
+        "  for (let x = 0; x < r.width; x++) {"
+        "    const k = (y * r.width + x) * 4;"
+        "    if (r.data[k] !== col[0] || r.data[k+1] !== col[1]"
+        "        || r.data[k+2] !== col[2] || r.data[k+3] !== 255) continue;"
+        "    found += 1;"
+        "    const lon = west + ((x + 0.5) / r.width) * (east - west);"
+        "    if (lon < span[0][1] || lon > span[1][1]) outside += 1;"
+        "  }"
+        "}"
+        "return {count: r.count, found, outside}; })()"
+    )
+
+
+def test_a_step_cell_gets_a_marker_even_when_it_is_not_flagged():
+    # The step cell at (0, 1) has no trend verdict at all: soil step changes
+    # are data defects, so they are marked on every mode, not merged into the
+    # flag count.
+    for mode in ("naive", "corrected", "dropped"):
+        r = _step_marker(mode)
+        assert r["found"] > 0, mode
+        assert r["outside"] == 0, mode
+
+
+def test_the_step_marker_does_not_change_the_verdict_count():
+    r = _step_marker("naive")
+    assert r["count"] == 3
+
+
+def test_describe_cell_reports_the_step_and_its_size():
+    marked = call(f"M.describeCell({json.dumps(_step_demo())}, 0, 1)")
+    assert marked["step"] is True
+    assert marked["stepMagnitude"] == 7.5
+    clean = call(f"M.describeCell({json.dumps(_step_demo())}, 0, 0)")
+    assert clean["step"] is False
+    assert clean["stepMagnitude"] is None
+    assert call(f"M.describeCell({json.dumps(DEMO)}, 0, 0)")["step"] is False
