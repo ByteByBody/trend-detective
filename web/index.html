@@ -93,6 +93,7 @@
         <div class="legend__keys">
           <span><i class="key key--solid" aria-hidden="true"></i>survives correction</span>
           <span id="legend-key-dashed"><i class="key key--dashed" aria-hidden="true"></i>dropped by correction</span>
+          <span id="legend-key-step" hidden><i class="key key--step" aria-hidden="true"></i>step change in data</span>
         </div>
         <p class="legend__facts" id="facts"></p>
       </aside>
@@ -101,6 +102,7 @@
         <i class="loupe__dot" aria-hidden="true"></i>
         <span id="loupe-coords"></span>
         <span id="loupe-trend"></span>
+        <span class="loupe__step" id="loupe-step" hidden>step change</span>
       </div>
     </section>
 
@@ -119,6 +121,7 @@
             <span class="tick" id="cell-naive"></span>
             <span class="tick" id="cell-corrected"></span>
           </div>
+          <p class="readout__step" id="cell-step" hidden></p>
         </div>
         <div class="readout__foot">
           <button class="tool" id="fingerprint-toggle" type="button" aria-pressed="false" disabled>

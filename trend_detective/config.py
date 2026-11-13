@@ -15,6 +15,17 @@ MIN_VALID_FRACTION = 0.8
 #: Minimum connected-patch size (pixels) kept by the coherence gate.
 MIN_PATCH_SIZE = 5
 
+#: Step-change detector: months on each side of the split, the gap between
+#: candidate splits, the field-relative cut in robust sigmas
+#: (``median + STEP_THRESHOLD_SIGMA * 1.4826 * MAD``), and the band the
+#: end-of-record shift must sit in relative to one window step: a durable step
+#: lands near 1, a smooth ramp far above it, a returning excursion near 0.
+STEP_WINDOW = 60
+STEP_STRIDE = 6
+STEP_THRESHOLD_SIGMA = 15.0
+STEP_PERSISTENCE_MIN = 0.5
+STEP_PERSISTENCE_MAX = 2.0
+
 #: Default analysis grid shape as (ny, nx).
 DEFAULT_GRID = (45, 90)
 

@@ -743,6 +743,7 @@ main {
 }
 .key--solid { border: 1.5px solid var(--paper); }
 .key--dashed { border: 1.5px dashed var(--ember); }
+.key--step { border: 1.5px solid #b284ff; background: rgba(178, 132, 255, 0.4); }
 .key--line { width: 18px; height: 0; border-top: 2px solid var(--ice); }
 .key--trend { width: 18px; height: 0; border-top: 2px dashed var(--ember); }
 
@@ -840,6 +841,14 @@ main {
   font-size: 0.58rem;
   color: var(--paper-dim);
 }
+.loupe__step {
+  margin-top: 0.2rem;
+  font-size: 0.52rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #b284ff;
+}
+.loupe__step[hidden] { display: none; }
 
 /* ---- raster and selection ---------------------------------------------- */
 
@@ -1040,6 +1049,15 @@ main {
   gap: 0.34rem;
   margin-bottom: auto;
 }
+
+.readout__step {
+  margin: 0.7rem 0 0;
+  font-family: var(--readout);
+  font-size: 0.58rem;
+  line-height: 1.5;
+  color: #c9a8ff;
+}
+.readout__step[hidden] { display: none; }
 
 .tick {
   padding: 0.29rem 0.5rem;

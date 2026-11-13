@@ -258,6 +258,7 @@
       const names = state.demo.units || "";
       el("loupe-coords").textContent = place(cell.lat, cell.lon);
       el("loupe-trend").textContent = trendLabel(info.slope, names);
+      el("loupe-step").hidden = !info.step;
       loupe.dataset.status = info.status;
       loupe.hidden = false;
       crosshair.hidden = false;
@@ -537,6 +538,8 @@
 
     const dashed = el("legend-key-dashed");
     if (dashed) dashed.hidden = mode !== "naive";
+    const stepKey = el("legend-key-step");
+    if (stepKey) stepKey.hidden = !(demo && TDTrend.stepCount(demo) > 0);
   }
 
   function legendEndpoint(slope, units) {
@@ -548,11 +551,16 @@
   }
 
   function updateFacts(demo) {
-    el("facts").textContent = [
+    const facts = [
       `Cutoff p ≤ ${fmt(demo.threshold, "", { significant: 3 })}`,
       `Coverage ${fmt(demo.valid_fraction * 100, "%", { decimals: 0 })}`,
       `${fmt(demo.n_naive, "pixels")} → ${fmt(demo.n_corrected, "pixels")}`,
-    ].join(" · ");
+    ];
+    const steps = TDTrend.stepCount(demo);
+    if (steps > 0) {
+      facts.push(`${fmt(steps, steps === 1 ? "step cell" : "step cells")}`);
+    }
+    el("facts").textContent = facts.join(" · ");
   }
 
   function updateMethod(demo) {
@@ -606,6 +614,14 @@
       ? VERDICT_WORDS.corrected.on
       : VERDICT_WORDS.corrected.off;
     corrected.classList.toggle("is-on", cell.corrected);
+
+    const step = el("cell-step");
+    if (step) {
+      step.hidden = !cell.step;
+      step.textContent = cell.step
+        ? `Step change of ${fmt(cell.stepMagnitude, units)} in the record (data defect).`
+        : "";
+    }
 
     el("chart-hint").textContent = `${place(cell.lat, cell.lon)} · monthly`;
     el("fingerprint-toggle").disabled = false;
@@ -679,6 +695,8 @@
     el("cell-trend").textContent = "";
     el("cell-p").textContent = "";
     el("cell-status").textContent = "";
+    el("cell-step").hidden = true;
+    el("cell-step").textContent = "";
     el("cell-naive").textContent = "";
     el("cell-corrected").textContent = "";
     el("cell-naive").classList.remove("is-on");

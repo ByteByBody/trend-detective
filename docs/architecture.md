@@ -64,7 +64,7 @@ DataArray`), selected by `config.DATA_SOURCE`.
 Sources declare what they can serve through `variables()`, and `base.available_variables`
 falls back to the whole catalogue for sources that do not. Units are converted at the
 source boundary, so every layer above assumes catalogue units. Details per source:
-[`algorithms.md`](algorithms.md) §9 and §10.
+[`algorithms.md`](algorithms.md) §10 and §11.
 
 ## Analysis pipeline
 
@@ -75,11 +75,17 @@ deseasonalize  →  Theil–Sen slope + Mann–Kendall (Hamed–Rao)  →  valid
                →  naive mask (p < 0.05)
                →  Benjamini–Hochberg (q = 0.05)  →  connected-patch gate (>= 5 px)
                →  Moran's I diagnostic
+               →  step-change detector (marks; changes neither verdict)
 ```
 
 Hamed–Rao has to come first because it repairs the p-values themselves; BH then corrects
 for the number of tests, and the patch gate removes the lone survivors that no field-wide
-test can defend. The per-step math is in [`algorithms.md`](algorithms.md) §2–§7.
+test can defend. The per-step math is in [`algorithms.md`](algorithms.md) §2–§8.
+
+The step detector runs last and is purely additive: it reads the same deseasonalized
+series and adds a mask, so a cell can be a step *and* a corrected flag. Marking rather
+than excluding keeps the two verdicts byte-identical to what they were before the
+detector existed.
 
 The result is one frozen object carrying both verdicts, so nothing downstream ever has to
 decide which one is "the" answer.
@@ -89,14 +95,14 @@ decide which one is "the" answer.
 Six routes, all thin. `/demo` and `/timeseries` read one variable; `/fingerprint` builds
 across all five. `/health` deliberately never touches the data source, because a cold PSL
 load takes seconds and a probe that waits on it would report a healthy app as down.
-Endpoint-by-endpoint detail: [`algorithms.md`](algorithms.md) §8.
+Endpoint-by-endpoint detail: [`algorithms.md`](algorithms.md) §9.
 
 ## Web client
 
 Five vanilla-JS modules with no build step and no framework: `projection.js` maps
 grid rows to Mercator rows, `format.js` handles numbers and units, `trend-layer.js` owns
-cell lookup, classification, the geographic field box and the raster builder, `chart-view.js`
-owns the Plotly chart, and `app.js` orchestrates.
+cell lookup, classification, the geographic field box, the raster builder and the violet
+step marker, `chart-view.js` owns the Plotly chart, and `app.js` orchestrates.
 
 The invariant that keeps the map honest is `TDTrend.fieldBounds`: one function returns the
 geographic rectangle that the image overlay, the stage border, `fitBounds` and the
@@ -113,7 +119,7 @@ its own meridian by up to 1.86°. The failure mode is invisible by construction 
 | in-process | `lru_cache` in the API | variable | a restart |
 
 Both on-disk trees are gitignored. A cache hit still runs the validator but costs no
-network. See [`algorithms.md`](algorithms.md) §13 for the signature internals.
+network. See [`algorithms.md`](algorithms.md) §14 for the signature internals.
 
 ## Tunables
 
@@ -126,6 +132,9 @@ network. See [`algorithms.md`](algorithms.md) §13 for the signature internals.
 | `PSL_START` / `PSL_END` / `PSL_STRIDE` | `1980` / `2024` / `2` | global span and decimation |
 | `PSL_CHUNK_YEARS` | `5` | years per download request |
 | `POWER_BBOX` / `POWER_START` / `POWER_END` | Greenland, `1990`, `2024` | regional request |
+| `STEP_WINDOW` / `STEP_STRIDE` | `60` / `6` | months on each side of a step, and split spacing |
+| `STEP_THRESHOLD_SIGMA` | `15.0` | field-relative cut on the step magnitude |
+| `STEP_PERSISTENCE_MIN` / `_MAX` | `0.5` / `2.0` | band the end-of-record shift must sit in, relative to the step |
 
 Every one of them is a function argument somewhere, not a literal buried in the analysis
 code.

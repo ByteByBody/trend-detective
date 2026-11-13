@@ -52,6 +52,36 @@ def flat_source(monkeypatch):
     app_module._demo_body.cache_clear()
 
 
+class _StepSource:
+    """A small grid with one abrupt jump and noise everywhere else."""
+
+    def load(self, variable: str) -> xr.DataArray:
+        rng = np.random.default_rng(0)
+        values = rng.normal(0.0, 0.05, size=(240, 6, 6))
+        values[120:, 3, 3] += 20.0
+        return xr.DataArray(
+            values,
+            dims=("time", "lat", "lon"),
+            coords={
+                "time": np.arange(240),
+                "lat": np.linspace(5.0, -5.0, 6),
+                "lon": np.linspace(-5.0, 5.0, 6),
+            },
+            name="value",
+            attrs={"variable": variable, "units": "x"},
+        )
+
+
+@pytest.fixture
+def step_source(monkeypatch):
+    monkeypatch.setattr(app_module, "_SOURCE", _StepSource())
+    app_module._demo_grid.cache_clear()
+    app_module._demo_body.cache_clear()
+    yield
+    app_module._demo_grid.cache_clear()
+    app_module._demo_body.cache_clear()
+
+
 class _PrecipOnlySource:
     """A source that serves a single variable, like POWER does."""
 
@@ -143,6 +173,19 @@ def test_demo_endpoint_shape():
     ).issubset(body)
     assert len(body["naive_mask"]) == len(body["lat"])
     assert len(body["naive_mask"][0]) == len(body["lon"])
+
+
+def test_demo_marks_step_changes_without_touching_the_verdicts(step_source):
+    body = client.get("/demo/soil_moisture_rootzone").json()
+
+    assert len(body["step_mask"]) == len(body["lat"])
+    assert len(body["step_mask"][0]) == len(body["lon"])
+    assert body["step_mask"][3][3] == 1
+    assert sum(sum(row) for row in body["step_mask"]) == 1
+    assert body["step_magnitude"][3][3] is not None
+    # The two verdicts still travel; the step mark is additive.
+    assert len(body["naive_mask"]) == len(body["lat"])
+    assert len(body["corrected_mask"]) == len(body["lat"])
 
 
 def test_demo_exposes_a_per_pixel_p_value_grid_for_the_hover_readout():

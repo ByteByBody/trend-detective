@@ -31,8 +31,9 @@ from trend_detective.data import cache
 
 #: Bump when what a persisted body depends on changes, so old files are ignored:
 #: the body's shape *or its inputs* — e.g. a variable starts reading a different
-#: PSL file, which the source-class signature cannot see.
-ANALYSIS_SCHEMA = 2
+#: PSL file, which the source-class signature cannot see. Schema 3 adds the
+#: ``step_mask`` and ``step_magnitude`` fields.
+ANALYSIS_SCHEMA = 3
 
 #: Root under which the analysis files live (``<root>/analysis``). It mirrors the
 #: raw data cache root so both share one gitignored tree. It is a module
