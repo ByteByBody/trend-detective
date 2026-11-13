@@ -1,4 +1,4 @@
-from trend_detective.analysis import pipeline
+from trend_detective.analysis import decomp, pipeline
 from trend_detective.data import sample
 
 
@@ -36,7 +36,12 @@ def test_insufficient_record_pixels_are_counted_and_never_flagged():
 
 def test_morans_i_reported_and_positive_for_injected_patches():
     da, gt = sample.generate_land_grid(seed=5, ny=30, nx=60, n_months=240, autocorr=0.5)
-    res = pipeline.cry_wolf(da)
+    # Pin the deseasonalization. The exact pixel count below is a property of
+    # climatology removal; STL (used when statsmodels is installed) shifts two
+    # neighbour pixels past the patch gate, and STL has its own tests in
+    # tests/test_decomp.py.
+    series = decomp.deseasonalize(da, method="climatology")
+    res = pipeline.cry_wolf(series, do_deseasonalize=False)
     # neighbouring pixels inside the true patches share a slope, so the
     # corrected field should be spatially clustered.
     assert res.morans_i > 0.5
