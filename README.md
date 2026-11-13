@@ -88,6 +88,10 @@ at the source boundary, so nothing downstream ever sees a mixed-unit field:
 | `soil_moisture_rootzone` | fraction | × 1000 × 1.9 m | kg/m2 |
 | `evapotranspiration` | W/m2 | ÷ 2.5e6 × 86,400 | mm/day |
 
+Precipitation needs no density factor. `kg/m2` is already a water depth, since 1 kg of
+water over 1 m2 is 1 mm, so only seconds convert to days. Soil moisture does need one,
+because its input is a dimensionless volume fraction rather than a per-area mass.
+
 All five files sit on PSL's T62 Gaussian grid, so one horizontal grid is shared and the
 fingerprint can compare variables at a single pixel. Temperature reads
 `surface_gauss/air.2m.mon.mean.nc`, the true 2 m field, rather than the 2.5° `surface/`
@@ -191,6 +195,9 @@ be skipped while iterating:
 ```bash
 python -m pytest -q --ignore=tests/test_api.py
 ```
+
+That is the command CI runs on every push (`.github/workflows/tests.yml`), on Python 3.13
+with node for the front-end probes.
 
 The front-end modules are checked by the same suite through `node --check` and a few
 hand-written probes, so no separate JS toolchain is needed.

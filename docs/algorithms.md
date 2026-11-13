@@ -388,6 +388,10 @@ level, not the 2 m field the catalogue label promises.
 | `soil_moisture_rootzone` | `soilw` | fraction | × 1000 × 1.9 m | kg/m2 | Amazon 0.26 → 494 kg/m2 |
 | `evapotranspiration` | `lhtfl` | W/m2 | ÷ 2.5e6 × 86,400 | mm/day | July tropics +133.6 → 4.6 mm/day, sign kept |
 
+Precipitation carries no density factor. `kg/m2` is already a depth of water, since 1 kg
+over 1 m2 is 1 mm, so `prate` converts only seconds to days. Soil moisture does carry one,
+because its input is a dimensionless volume fraction rather than a per-area mass.
+
 The latent-heat sign is deliberate. The NCEP file is positive upward over the warm ocean
 in July (mean +133.6 W/m2), so it is evaporation rather than condensation, and flipping
 it would turn a physical fact into a formatting habit.
