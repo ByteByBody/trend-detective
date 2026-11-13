@@ -1,0 +1,11 @@
+.git/
+.github/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Fetched during the build from the release asset; never part of the context.
+data/cache/
