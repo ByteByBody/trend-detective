@@ -298,21 +298,24 @@ keep      = 0.5 * D <= |endpoints| <= 2.0 * D
 ```
 
 A durable step of size `H` leaves `|endpoints| ~ H ~ D`, so its ratio sits near 1 and it
-passes. A smooth ramp over 540 months leaves the whole ramp's worth, several window-steps
-(ratios of 4–48 on the real field), and is rejected. A flood or drought excursion that
-returns to its old level leaves almost nothing (ratios near 0) and is rejected too. The
-band is what separates "the record moved and stayed moved" from "the record went up and
-came back" and from "the record was always climbing".
+passes. A smooth ramp over 540 months leaves the whole ramp's worth, several times `D`, and
+is rejected. A flood or drought excursion that returns to its old level leaves almost
+nothing (ratios near 0) and is rejected too. The band is what separates "the record moved
+and stayed moved" from "the record went up and came back" and from "the record was always
+climbing".
 
 Thresholds live in `config.py`: `STEP_WINDOW`, `STEP_STRIDE`, `STEP_THRESHOLD_SIGMA`,
-`STEP_PERSISTENCE_MIN`, `STEP_PERSISTENCE_MAX`. The rule was signed off against the real
-PSL field, where it marks 11 soil-moisture pixels and none in the other four variables.
-The clearest is (80.95°N, −67.50°E): its record holds 190.19 kg m-2 for 1980–1998 and
-about 729 after, a jump of 532.91 kg m-2 — 111 robust sigmas against the field's 4.76
-scale — while its neighbours stay within 0.41. The persistence guard rejects six more
-soil pixels that cleared the magnitude cut but whose end-of-record shift ran four to
-forty-eight window-steps: smooth ramps, not level changes. That rejection is the reason
-the guard exists.
+`STEP_PERSISTENCE_MIN`, `STEP_PERSISTENCE_MAX`. Like the trend test, the detector reads the
+deseasonalised series, so a step is judged on what actually drove the p-value. The rule was
+signed off against the real PSL field, where it marks one soil-moisture pixel and none in
+the other four variables. It is (80.95°N, −67.50°E): the record holds 190.19 kg m-2 for
+1980–1998 and about 729 after, a step of `D = 496.94 kg m-2` against a field threshold of
+203.67 kg m-2 (`median 9.45 + 15 x 12.95`), and the shift left at the end of the record is
+537.96 kg m-2, a ratio of 1.08. Its neighbours' end-of-record shifts stay within
+1.78 kg m-2. Three other soil pixels clear the magnitude cut, at 279.91, 364.80 and
+328.66 kg m-2, but their end-of-record shifts are only 0.02 to 0.17 of the step: excursions
+that came back, and the persistence band drops all three. That rejection is the reason the
+guard exists.
 
 ## 9. API — `api/app.py`
 
@@ -644,8 +647,9 @@ cache_dir=None) -> dict | None`, `save(variable, body, signature=None, cache_dir
   *invisible* rather than being served.
 - **`ANALYSIS_SCHEMA` is the manual lever.** The signature sees configuration, not code
   or the dataset table, so the module bumps `ANALYSIS_SCHEMA` when a body's inputs change
-  invisibly. It is `2`, which retired bodies computed before surface temperature moved to
-  the T62 `air.2m` file.
+  invisibly. It is `3`, which added the `step_mask` and `step_magnitude` fields to the
+  body (`2` retired bodies computed before surface temperature moved to the T62 `air.2m`
+  file).
 - **File:** `<cache>/analysis/<variable>.<signature>.json`.
 - **Atomic write.** The body goes to `<name>.<pid>.<thread>.part` and is renamed into
   place with `os.replace`, so a crash or a concurrent writer never leaves a half-written
@@ -656,7 +660,8 @@ cache_dir=None) -> dict | None`, `save(variable, body, signature=None, cache_dir
   two trees are gitignored together. Tests override just this module attribute to stay off
   the real cache without disturbing the raw chunks.
 - **Measured.** A cold cry-wolf body, STL deseasonalisation plus trend testing, took
-  **615 s** for `surface_temperature` on the shipped 47×96 grid on a four-CPU machine.
+  **647 s** for `surface_temperature` and up to **733 s** for `evapotranspiration` on the
+  shipped 47×96 grid on a four-CPU machine.
   The body is written at the end of that run, so an interrupted analysis saves nothing and
   is recomputed, while a disk hit returns the stored body in under a second and survives a
   `--reload`.

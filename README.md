@@ -36,16 +36,18 @@ Results on the shipped field, one analysis per variable:
 | Surface air temperature | 3,456 | 3,407 | 49 | 0 |
 | Evapotranspiration | 2,947 | 2,756 | 191 | 0 |
 | Precipitation | 2,856 | 2,678 | 178 | 0 |
-| Root-zone soil moisture | 1,062 | 994 | 68 | 11 |
+| Root-zone soil moisture | 1,062 | 994 | 68 | 1 |
 | Snow water equivalent | 5 | 0 | 5 | 0 |
 
 Snow water equivalent is the clean empty case: five scattered flags, no patch behind any
 of them, so the corrected map draws nothing.
 
-Eleven soil-moisture records jump and stay jumped, which is the shape of an upstream
-ingest defect rather than a climate trend. The clearest sits at (80.95°N, −67.50°E),
-where the record holds 190.19 kg m-2 through 1998 and about 729 after — a jump of
-532.91 kg m-2, while its neighbours stay within 0.41.
+One soil-moisture record jumps and stays jumped, which is the shape of an upstream ingest
+defect rather than a climate trend. It sits at (80.95°N, −67.50°E), where the record holds
+190.19 kg m-2 through 1998 and about 729 after: a step of 496.94 kg m-2, and the level at
+the end of the record is still 537.96 kg m-2 above where it started, while the neighbouring
+cells' end-of-record shifts stay within 1.78. Three more soil pixels clear the magnitude
+cut but return to their old level, and the persistence gate drops all three.
 
 ## The map
 
@@ -128,7 +130,7 @@ NetCDF3, which `scipy` reads, so the source needs no extra dependency and no HDF
 
 The API also persists each variable's finished cry-wolf body under
 `data/cache/analysis/`, keyed by an `ANALYSIS_SCHEMA` fingerprint of the source, grid and
-correction parameters. A server restart reuses the 5–11 minute analysis instead of
+correction parameters. A server restart reuses the minutes-long analysis instead of
 recomputing it, and changing the analysis code or the grid invalidates the old body
 automatically. Delete `data/cache/` to force a fresh download.
 
