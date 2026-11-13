@@ -26,6 +26,7 @@ REPO_URL = "https://github.com/ByteByBody/trend-detective"
 BRANCH = "main"
 PROJECT = "trend-detective"
 SERVICE = "trend-detective"
+REGION = "europe-west"
 APP_PORT = 7860
 #: 0.5 vCPU and 1 GB: $12 a month, inside the free Sandbox credit, and the
 #: service never sleeps.
@@ -119,9 +120,18 @@ def ensure_project(token: str, name: str = PROJECT) -> str:
     for project in projects:
         if project.get("name") == name:
             return project["id"]
-    created = call("/projects", token, {"name": name})
+    created = call("/projects", token, project_payload(name))
     print(f"project created: {created['id']}")
     return created["id"]
+
+
+def project_payload(name: str, region: str = REGION) -> dict:
+    """The project that holds the service."""
+    return {
+        "name": name,
+        "description": "Trend Detective, NASA Space Apps 2026",
+        "region": region,
+    }
 
 
 def ensure_service(token: str, project: str, name: str = SERVICE) -> dict:

@@ -46,6 +46,13 @@ def test_service_payload_probes_the_health_endpoint():
     assert check["port"] == 7860
 
 
+def test_a_new_project_is_created_in_a_region():
+    payload = northflank.project_payload("trend-detective")
+
+    assert payload["name"] == "trend-detective"
+    assert payload["region"] == "europe-west"
+
+
 def test_api_url_joins_paths_under_the_versioned_root():
     assert northflank.api_url("/projects") == "https://api.northflank.com/v1/projects"
 
